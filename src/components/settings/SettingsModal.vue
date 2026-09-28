@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useUi, type SettingsTab } from '@/stores/ui'
 import Icon from '@/components/common/Icon.vue'
 import type { IconName } from '@/components/common/icons'
 import Modal from '@/components/common/Modal.vue'
@@ -12,14 +13,14 @@ import './settings.css'
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
-type Tab = 'types' | 'display' | 'data' | 'about'
-const tabs: { id: Tab; label: string; icon: IconName }[] = [
+const tabs: { id: SettingsTab; label: string; icon: IconName }[] = [
   { id: 'types', label: '类型管理', icon: 'tag' },
   { id: 'display', label: '显示与图片', icon: 'sliders' },
   { id: 'data', label: '数据备份', icon: 'database' },
   { id: 'about', label: '关于', icon: 'info' },
 ]
-const tab = ref<Tab>('types')
+// 当前分页记在全局状态里，方便从其他地方直接打开「数据备份」页
+const { settingsTab: tab } = storeToRefs(useUi())
 </script>
 
 <template>

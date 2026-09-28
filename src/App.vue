@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAutoBackup } from '@/stores/autoBackup'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
 import ConfirmHost from '@/components/common/ConfirmHost.vue'
@@ -9,7 +10,9 @@ import SettingsModal from '@/components/settings/SettingsModal.vue'
 
 const store = useLineups()
 const ui = useUi()
-store.init()
+const autoBackup = useAutoBackup()
+// 数据读取完成后再恢复自动备份（需要知道当前有没有 Lineup）
+store.init().then(() => autoBackup.init())
 
 function retry() {
   location.reload()

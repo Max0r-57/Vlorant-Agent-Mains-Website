@@ -247,7 +247,7 @@ const mapPadding = computed(() =>
         @detail="openDetail"
         @hover="(id) => (hoverResultKey = id ? posKey(store.lineupById.get(id)!) : null)"
         @collapse="prefs.sidebarOpen = false"
-        @settings="ui.settingsOpen = true"
+        @settings="ui.openSettings()"
         @dictionary="router.push({ name: 'dict' })"
       />
     </div>

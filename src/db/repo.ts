@@ -128,6 +128,11 @@ export async function setMeta(key: string, value: unknown) {
   await db.put('meta', value, key)
 }
 
+export async function deleteMeta(key: string) {
+  const db = await getDB()
+  await db.delete('meta', key)
+}
+
 export async function clearAll() {
   const db = await getDB()
   const tx = db.transaction(['lineups', 'types', 'images', 'meta'], 'readwrite')

@@ -9,6 +9,7 @@ import TimeFilterPicker from '@/components/common/TimeFilter.vue'
 import TypeFilter from '@/components/common/TypeFilter.vue'
 import ResultCard from '@/components/lineup/ResultCard.vue'
 import BrandMark from '@/components/common/BrandMark.vue'
+import BackupStatusChip from '@/components/common/BackupStatusChip.vue'
 
 /** 首页左侧导览栏 */
 defineProps<{
@@ -126,6 +127,7 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
       </div>
     </div>
 
+    <BackupStatusChip />
     <footer class="foot">
       <button type="button" class="btn btn-ghost foot-btn" @click="emit('settings')">
         <Icon name="settings" :size="17" />
