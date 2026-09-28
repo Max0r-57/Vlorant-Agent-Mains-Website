@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useUi } from '@/stores/ui'
+import BackupNotice from './BackupNotice.vue'
 import Icon from './Icon.vue'
 
 const ui = useUi()
@@ -8,6 +9,7 @@ const ui = useUi()
 <template>
   <Teleport to="body">
     <div class="toasts" role="status" aria-live="polite">
+      <BackupNotice />
       <TransitionGroup name="toast">
         <div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind">
           <Icon :name="t.kind === 'error' ? 'alert' : t.kind === 'info' ? 'info' : 'check'" :size="16" class="kind" />

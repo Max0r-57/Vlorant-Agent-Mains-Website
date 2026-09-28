@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from 'vue'
+import { nextTick, onMounted, ref, shallowRef } from 'vue'
 import { backupFileName, exportBackup, parseBackup, type ParsedBackup } from '@/db/backup'
 import { imageStats } from '@/db/repo'
 import { formatBytes, formatDateTime } from '@/lib/format'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
 import Icon from '@/components/common/Icon.vue'
+import AutoBackupSettings from './AutoBackupSettings.vue'
 
 /** 数据管理：存储占用、导出 / 导入备份、清理图片、清空数据 */
 const store = useLineups()
@@ -20,6 +21,14 @@ const lastExport = ref<number | null>(readLastExport())
 const busy = ref<'' | 'export' | 'import' | 'cleanup' | 'clear'>('')
 const fileInput = ref<HTMLInputElement>()
 const pending = shallowRef<{ file: string; data: ParsedBackup } | null>(null)
+const importCard = ref<HTMLElement>()
+
+/** 从自动备份文件夹里选了一份备份：和手动选择文件一样，先显示内容再确认导入 */
+async function onAutoRestore(file: string, data: ParsedBackup) {
+  pending.value = { file, data }
+  await nextTick()
+  importCard.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
 
 function readLastExport() {
   try {
@@ -128,7 +137,7 @@ async function cleanup() {
 async function clearAll() {
   const ok = await ui.confirm({
     title: '清空所有数据？',
-    message: `将永久删除全部 ${store.lineups.length} 个 Lineup、所有图片和自定义类型，建议先导出备份。此操作无法撤销。`,
+    message: `将永久删除全部 ${store.lineups.length} 个 Lineup、所有图片和自定义类型，建议先导出备份。此操作无法撤销。\n自动备份也会同时关闭，备份文件夹里已有的文件不会被删除。`,
     confirmText: '全部清空',
     danger: true,
   })
@@ -149,7 +158,7 @@ async function clearAll() {
     <h3 class="s-title">存储情况</h3>
     <p class="s-desc">
       所有数据只保存在<b>当前浏览器</b>中（IndexedDB），不会上传到任何服务器。
-      换电脑、换浏览器或清除浏览器数据前，请先导出备份。
+      清除浏览器的「Cookie 和网站数据」会把它们一起删掉，所以请开启下面的自动备份，或定期导出备份。
     </p>
     <div class="stats">
       <div class="stat">
@@ -185,8 +194,10 @@ async function clearAll() {
     </div>
   </section>
 
+  <AutoBackupSettings @restore="onAutoRestore" />
+
   <section class="s-section">
-    <h3 class="s-title">备份与恢复</h3>
+    <h3 class="s-title">手动备份与恢复</h3>
     <div class="s-row">
       <div class="s-row-text">
         <span class="s-row-label">导出备份</span>
@@ -213,7 +224,7 @@ async function clearAll() {
       <input ref="fileInput" class="sr-only" type="file" accept=".zip,application/zip" @change="onPickBackup" />
     </div>
 
-    <div v-if="pending" class="import-card">
+    <div v-if="pending" ref="importCard" class="import-card">
       <div class="import-head">
         <Icon name="database" :size="18" />
         <div>

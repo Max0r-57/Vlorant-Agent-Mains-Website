@@ -48,9 +48,9 @@ function zipAsync(files: Zippable) {
   )
 }
 
-function unzipAsync(data: Uint8Array) {
+function unzipAsync(data: Uint8Array, only?: string) {
   return new Promise<Unzipped>((resolve, reject) =>
-    unzip(data, (err, files) => (err ? reject(err) : resolve(files))),
+    unzip(data, only ? { filter: (f) => f.name === only } : {}, (err, files) => (err ? reject(err) : resolve(files))),
   )
 }
 
@@ -127,6 +127,21 @@ function num(v: unknown, fallback = 0) {
 
 function clampPos(v: unknown) {
   return Math.min(POS_MAX, Math.max(0, Math.round(num(v, POS_MAX / 2))))
+}
+
+/** 只读取备份的概要（不解压图片），用于列表和提示 */
+export async function readBackupSummary(file: Blob) {
+  const files = await unzipAsync(await toBytes(file), 'backup.json').catch(() => ({}) as Unzipped)
+  const raw = files['backup.json']
+  if (!raw) throw new Error('不是有效的备份文件')
+  const json = JSON.parse(strFromU8(raw)) as Partial<BackupJson>
+  if (json.format !== BACKUP_FORMAT) throw new Error('不是本网站的备份文件')
+  return {
+    exportedAt: num(json.exportedAt),
+    lineups: Array.isArray(json.lineups) ? json.lineups.length : 0,
+    types: Array.isArray(json.types) ? json.types.length : 0,
+    images: Array.isArray(json.images) ? json.images.length : 0,
+  }
 }
 
 export async function parseBackup(file: Blob): Promise<ParsedBackup> {

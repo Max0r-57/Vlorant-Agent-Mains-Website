@@ -29,11 +29,19 @@ export interface LightboxState {
 
 let toastSeq = 0
 
+export type SettingsTab = 'types' | 'display' | 'data' | 'about'
+
 export const useUi = defineStore('ui', () => {
   const settingsOpen = ref(false)
+  const settingsTab = ref<SettingsTab>('types')
   const lightbox = shallowRef<LightboxState | null>(null)
   const toasts = ref<Toast[]>([])
   const confirmState = shallowRef<ConfirmState | null>(null)
+
+  function openSettings(tab?: SettingsTab) {
+    if (tab) settingsTab.value = tab
+    settingsOpen.value = true
+  }
 
   function openLightbox(sources: ImageSource[], index = 0, title?: string) {
     if (!sources.length) return
@@ -75,6 +83,8 @@ export const useUi = defineStore('ui', () => {
 
   return {
     settingsOpen,
+    settingsTab,
+    openSettings,
     lightbox,
     toasts,
     confirmState,
