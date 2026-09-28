@@ -6,7 +6,7 @@ import { useUi } from '@/stores/ui'
 import type { ImageSource } from '@/types'
 import Icon from './Icon.vue'
 
-/** 图片查看器：左右切换、滚轮缩放、拖动平移、双击放大 */
+/** 图片查看器：左右切换、滚轮 / 双指缩放、拖动平移、双击放大 */
 const ui = useUi()
 const state = computed(() => ui.lightbox)
 const open = computed(() => !!state.value)
@@ -19,8 +19,9 @@ const scale = ref(1)
 const tx = ref(0)
 const ty = ref(0)
 const stage = ref<HTMLElement>()
-let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pointerId: number } | null = null
-let swipeStart: { x: number; y: number } | null = null
+const imgEl = ref<HTMLImageElement>()
+/** 捏合 / 放大动画时临时关闭 transform 过渡 */
+const animating = ref(false)
 
 function resetZoom() {
   scale.value = 1
@@ -78,22 +79,56 @@ function onKeydown(e: KeyboardEvent) {
 }
 watch(open, (v) => {
   if (v) window.addEventListener('keydown', onKeydown)
-  else window.removeEventListener('keydown', onKeydown)
+  else {
+    window.removeEventListener('keydown', onKeydown)
+    pointers.clear()
+    gesture = null
+    lastTap = null
+  }
 })
 
 // ---- 缩放 / 平移 ----
-function zoomAt(clientX: number, clientY: number, next: number) {
+// 电脑：滚轮缩放、双击放大、拖动平移；手机：双指捏合缩放、双击放大、单指拖动平移、左右滑动切换
+const MAX_SCALE = 8
+
+/** 图片中心相对舞台中心的偏移为 (tx, ty)；限制平移范围，避免把图片拖出屏幕 */
+function clampPan() {
   const el = stage.value
-  if (!el) return
-  const r = el.getBoundingClientRect()
-  const cx = clientX - (r.left + r.width / 2)
-  const cy = clientY - (r.top + r.height / 2)
-  const s = Math.min(6, Math.max(1, next))
+  const img = imgEl.value
+  if (!el || !img) return
+  const w = img.offsetWidth * scale.value
+  const h = img.offsetHeight * scale.value
+  const maxX = Math.max(0, (w - el.clientWidth) / 2)
+  const maxY = Math.max(0, (h - el.clientHeight) / 2)
+  tx.value = Math.min(maxX, Math.max(-maxX, tx.value))
+  ty.value = Math.min(maxY, Math.max(-maxY, ty.value))
+}
+
+function stageCenter() {
+  const r = stage.value!.getBoundingClientRect()
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+}
+
+/** 以屏幕上的 (clientX, clientY) 为中心缩放到 next 倍 */
+function zoomAt(clientX: number, clientY: number, next: number) {
+  if (!stage.value) return
+  const c = stageCenter()
+  const cx = clientX - c.x
+  const cy = clientY - c.y
+  const s = Math.min(MAX_SCALE, Math.max(1, next))
   const k = s / scale.value
   tx.value = cx - (cx - tx.value) * k
   ty.value = cy - (cy - ty.value) * k
   scale.value = s
   if (s === 1) resetZoom()
+  else clampPan()
+}
+
+/** 双击 / 双击屏幕：未放大时放大到 2.5 倍，已放大时还原 */
+function toggleZoom(clientX: number, clientY: number) {
+  animating.value = true
+  zoomAt(clientX, clientY, scale.value > 1 ? 1 : 2.5)
+  setTimeout(() => (animating.value = false), 220)
 }
 
 function onWheel(e: WheelEvent) {
@@ -101,49 +136,135 @@ function onWheel(e: WheelEvent) {
   zoomAt(e.clientX, e.clientY, scale.value * Math.exp(-e.deltaY * 0.002))
 }
 
+let lastPointerType = 'mouse'
 function onDblClick(e: MouseEvent) {
-  zoomAt(e.clientX, e.clientY, scale.value > 1 ? 1 : 2.5)
+  // 触屏的双击由下面的 pointer 事件自己判断，这里只处理鼠标
+  if (lastPointerType === 'mouse') toggleZoom(e.clientX, e.clientY)
 }
 
 /** 点击图片以外的空白处关闭查看器 */
 function isOnImage(x: number, y: number) {
-  const img = stage.value?.querySelector('img')
+  const img = imgEl.value
   if (!img) return false
   const r = img.getBoundingClientRect()
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
 }
 
+type Pt = { x: number; y: number }
+const pointers = new Map<number, Pt>()
+let gesture: {
+  start: Pt
+  tx: number
+  ty: number
+  moved: boolean
+  /** 做过双指缩放：松手后不再当作点击 / 滑动 */
+  pinched: boolean
+  pinch?: { dist: number; scale: number; mid: Pt; tx: number; ty: number }
+} | null = null
+let lastTap: { t: number; x: number; y: number } | null = null
+
+function pinchInfo() {
+  const [a, b] = [...pointers.values()] as [Pt, Pt]
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } }
+}
+
 function onPointerDown(e: PointerEvent) {
-  if (e.button !== 0) return
-  drag = { x: e.clientX, y: e.clientY, tx: tx.value, ty: ty.value, moved: false, pointerId: e.pointerId }
-  swipeStart = { x: e.clientX, y: e.clientY }
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  lastPointerType = e.pointerType
+  // 新一轮触摸的第一根手指：清掉可能残留的旧触点（个别浏览器松手时不发 pointerup）
+  if (e.isPrimary) pointers.clear()
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (pointers.size === 1) {
+    gesture = { start: { x: e.clientX, y: e.clientY }, tx: tx.value, ty: ty.value, moved: false, pinched: false }
+  } else if (pointers.size === 2 && gesture) {
+    const { dist, mid } = pinchInfo()
+    gesture.moved = true
+    gesture.pinched = true
+    gesture.pinch = { dist, scale: scale.value, mid, tx: tx.value, ty: ty.value }
+  }
 }
 
 function onPointerMove(e: PointerEvent) {
-  if (!drag || drag.pointerId !== e.pointerId) return
-  const dx = e.clientX - drag.x
-  const dy = e.clientY - drag.y
-  if (Math.hypot(dx, dy) > 3) drag.moved = true
+  if (!pointers.has(e.pointerId) || !gesture) return
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  // 双指捏合：以两指中点为中心缩放，同时跟随中点平移
+  if (gesture.pinch && pointers.size >= 2) {
+    const p = gesture.pinch
+    const { dist, mid } = pinchInfo()
+    const s = Math.min(MAX_SCALE, Math.max(1, (p.scale * dist) / p.dist))
+    const c = stageCenter()
+    // 捏合开始时两指中点下的图片位置，保持在当前中点下
+    const ix = (p.mid.x - c.x - p.tx) / p.scale
+    const iy = (p.mid.y - c.y - p.ty) / p.scale
+    scale.value = s
+    tx.value = mid.x - c.x - s * ix
+    ty.value = mid.y - c.y - s * iy
+    clampPan()
+    return
+  }
+
+  const dx = e.clientX - gesture.start.x
+  const dy = e.clientY - gesture.start.y
+  if (!gesture.moved && Math.hypot(dx, dy) > 6) gesture.moved = true
   if (scale.value > 1) {
-    tx.value = drag.tx + dx
-    ty.value = drag.ty + dy
+    tx.value = gesture.tx + dx
+    ty.value = gesture.ty + dy
+    clampPan()
   }
 }
 
 function onPointerUp(e: PointerEvent) {
-  if (!drag) return
-  const moved = drag.moved
-  drag = null
-  // 未放大时左右滑动切换图片
-  if (scale.value === 1 && swipeStart) {
-    const dx = e.clientX - swipeStart.x
-    const dy = e.clientY - swipeStart.y
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1)
-    else if (!moved && !isOnImage(e.clientX, e.clientY)) ui.closeLightbox()
+  if (!pointers.has(e.pointerId)) return
+  pointers.delete(e.pointerId)
+  const g = gesture
+  if (!g) return
+
+  // 双指中松开一根手指：剩下的手指继续拖动
+  if (pointers.size > 0) {
+    const [rest] = [...pointers.values()] as [Pt]
+    gesture = { start: rest, tx: tx.value, ty: ty.value, moved: true, pinched: true }
+    return
   }
-  swipeStart = null
+  gesture = null
+  if (scale.value < 1.05) resetZoom()
+  if (e.type === 'pointercancel' || g.pinched) return
+
+  const dx = e.clientX - g.start.x
+  const dy = e.clientY - g.start.y
+
+  // 未放大时左右滑动切换图片
+  if (scale.value === 1 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    go(dx < 0 ? 1 : -1)
+    return
+  }
+  if (g.moved) return
+
+  // 触屏：自己判断双击
+  if (e.pointerType !== 'mouse') {
+    const now = performance.now()
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+      lastTap = null
+      clearTimeout(tapTimer)
+      toggleZoom(e.clientX, e.clientY)
+      return
+    }
+    lastTap = { t: now, x: e.clientX, y: e.clientY }
+    // 单击空白处关闭：等一下，确认不是双击的第一下
+    if (scale.value === 1 && !isOnImage(e.clientX, e.clientY)) {
+      const x = e.clientX
+      const y = e.clientY
+      clearTimeout(tapTimer)
+      tapTimer = setTimeout(() => {
+        if (lastTap && lastTap.x === x && lastTap.y === y) ui.closeLightbox()
+      }, 330)
+    }
+    return
+  }
+  if (scale.value === 1 && !isOnImage(e.clientX, e.clientY)) ui.closeLightbox()
 }
+let tapTimer: ReturnType<typeof setTimeout> | undefined
 </script>
 
 <template>
@@ -172,9 +293,11 @@ function onPointerUp(e: PointerEvent) {
         >
           <img
             v-if="url"
+            ref="imgEl"
             :src="url"
             alt=""
             draggable="false"
+            :class="{ animating }"
             :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale})` }"
           />
         </div>
@@ -199,7 +322,8 @@ function onPointerUp(e: PointerEvent) {
             <img v-if="t" :src="t" alt="" draggable="false" />
           </button>
         </footer>
-        <p class="hint">滚轮缩放 · 双击放大 · <span class="kbd">←</span> <span class="kbd">→</span> 切换 · <span class="kbd">Esc</span> 关闭</p>
+        <p class="hint desktop">滚轮缩放 · 双击放大 · <span class="kbd">←</span> <span class="kbd">→</span> 切换 · <span class="kbd">Esc</span> 关闭</p>
+        <p class="hint touch">双指缩放 · 双击放大 / 还原 · 放大后单指拖动 · 左右滑动切换</p>
       </div>
     </Transition>
   </Teleport>
@@ -253,7 +377,9 @@ function onPointerUp(e: PointerEvent) {
   user-select: none;
   pointer-events: none;
   transform-origin: center;
-  will-change: transform;
+}
+.stage img.animating {
+  transition: transform 0.2s var(--ease);
 }
 .nav {
   position: absolute;
@@ -305,10 +431,22 @@ function onPointerUp(e: PointerEvent) {
   object-fit: cover;
 }
 .hint {
-  padding: 0 0 12px;
+  padding: 0 12px 12px;
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
+}
+/* 触屏设备显示手势提示，电脑显示键盘 / 鼠标提示 */
+.hint.touch {
+  display: none;
+}
+@media (hover: none) and (pointer: coarse) {
+  .hint.desktop {
+    display: none;
+  }
+  .hint.touch {
+    display: block;
+  }
 }
 .lb-enter-active,
 .lb-leave-active {
@@ -323,9 +461,6 @@ function onPointerUp(e: PointerEvent) {
     padding: 0 8px;
   }
   .nav {
-    display: none;
-  }
-  .hint {
     display: none;
   }
 }
