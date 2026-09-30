@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { isTimeActive, type TimeFilter } from '@/lib/filter'
+import type { AreaSearchBy } from '@/stores/prefs'
 import type { Lineup, Position } from '@/types'
 import AgentPicker from '@/components/common/AgentPicker.vue'
 import Icon from '@/components/common/Icon.vue'
@@ -29,7 +30,7 @@ const emit = defineEmits<{
   hover: [id: string | null]
   rehearse: [id: string]
   hide: [id: string]
-  /** 点击区域搜索按钮：开始 / 取消在地图上圈画 */
+  /** 点击「圈画搜索」：开始 / 取消在地图上圈画 */
   'area-search': []
   collapse: []
   settings: []
@@ -41,8 +42,11 @@ const agentId = defineModel<string>('agentId', { required: true })
 const query = defineModel<string>('query', { required: true })
 const typeIds = defineModel<string[]>('typeIds', { required: true })
 const time = defineModel<TimeFilter>('time', { required: true })
-/** 区域搜索圈出的范围 */
+/** 圈画搜索圈出的范围 */
 const area = defineModel<Position[] | null>('area', { required: true })
+/** 圈画搜索按落点还是按站位搜索 */
+const areaBy = defineModel<AreaSearchBy>('areaBy', { required: true })
+const areaTarget = computed(() => (areaBy.value === 'landing' ? '落点' : '站位'))
 const hiddenIds = defineModel<string[]>('hiddenIds', { required: true })
 
 const searchInput = ref<HTMLInputElement>()
@@ -91,32 +95,50 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
     </div>
 
     <div class="search">
-      <div class="search-row">
-        <form class="search-box" role="search" @submit.prevent>
-          <Icon name="search" :size="16" class="search-icon" />
-          <input
-            ref="searchInput"
-            v-model="query"
-            class="input search-input"
-            type="search"
-            placeholder="搜索当前地图的 Lineup（名字 / 备注）"
-            aria-label="搜索 Lineup"
-          />
-          <button v-if="query" type="button" class="clear" aria-label="清空搜索" @click="query = ''">
-            <Icon name="x" :size="14" />
-          </button>
-        </form>
+      <form class="search-box" role="search" @submit.prevent>
+        <Icon name="search" :size="16" class="search-icon" />
+        <input
+          ref="searchInput"
+          v-model="query"
+          class="input search-input"
+          type="search"
+          placeholder="搜索当前地图的 Lineup（名字 / 备注）"
+          aria-label="搜索 Lineup"
+        />
+        <button v-if="query" type="button" class="clear" aria-label="清空搜索" @click="query = ''">
+          <Icon name="x" :size="14" />
+        </button>
+      </form>
+      <div class="lasso-row">
         <button
           type="button"
-          class="area-btn"
+          class="btn btn-outline lasso-btn"
           :class="{ on: lassoActive || !!area }"
           :aria-pressed="lassoActive"
-          :title="lassoActive ? '取消圈画' : '区域搜索：在地图上圈出范围，搜索范围内的落点'"
-          aria-label="区域搜索"
+          :title="lassoActive ? '取消圈画' : `在地图上圈出范围，搜索范围内的${areaTarget}`"
           @click="emit('area-search')"
         >
-          <Icon name="pen" :size="16" />
+          <Icon name="pen" :size="15" />
+          圈画搜索
         </button>
+        <div class="segmented by" role="group" aria-label="圈画搜索的对象">
+          <button
+            type="button"
+            :aria-pressed="areaBy === 'landing'"
+            title="按落点搜索：落点在圈内的 Lineup"
+            @click="areaBy = 'landing'"
+          >
+            落点
+          </button>
+          <button
+            type="button"
+            :aria-pressed="areaBy === 'position'"
+            title="按站位搜索：站位（地图上的圆点）在圈内的 Lineup"
+            @click="areaBy = 'position'"
+          >
+            站位
+          </button>
+        </div>
       </div>
       <div class="filters">
         <TimeFilterPicker v-model="time" block />
@@ -129,9 +151,9 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
       </div>
       <div v-else-if="area" class="area-chip">
         <Icon name="area" :size="15" />
-        <span class="area-text">区域搜索 · 圈内落点 <b class="tabular">{{ results.length }}</b> 个</span>
+        <span class="area-text">圈画搜索 · 圈内{{ areaTarget }} <b class="tabular">{{ results.length }}</b> 个</span>
         <button type="button" class="chip-btn" title="重新圈画" @click="emit('area-search')">重画</button>
-        <button type="button" class="chip-btn icon" title="取消区域搜索" aria-label="取消区域搜索" @click="area = null">
+        <button type="button" class="chip-btn icon" title="取消圈画搜索" aria-label="取消圈画搜索" @click="area = null">
           <Icon name="x" :size="13" />
         </button>
       </div>
@@ -166,7 +188,7 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
       <div v-if="!results.length" class="empty">
         <template v-if="filtered">
           <Icon name="search" :size="22" />
-          <p>{{ area && !hiddenIds.length ? '圈出的范围内没有落点' : '没有符合条件的 Lineup' }}</p>
+          <p>{{ area && !hiddenIds.length ? `圈出的范围内没有${areaTarget}` : '没有符合条件的 Lineup' }}</p>
           <button type="button" class="btn btn-sm btn-outline" @click="clearFilters">清除筛选</button>
         </template>
         <template v-else>
@@ -218,40 +240,43 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
   gap: 8px;
   padding: 12px 12px 10px;
 }
-.search-row {
-  display: flex;
-  gap: 6px;
-}
 .search-box {
   position: relative;
+}
+/* 圈画搜索：按钮 + 落点 / 站位选择 */
+.lasso-row {
+  display: flex;
+  gap: 8px;
+}
+.lasso-btn {
   flex: 1;
   min-width: 0;
 }
-/* 区域搜索按钮：正方形小框 + 画笔轮廓 */
-.area-btn {
-  display: grid;
+.lasso-btn :deep(.icon) {
+  color: var(--text-3);
+}
+.lasso-btn.on {
+  --btn-border: var(--cyan-dim);
+  --btn-bg: var(--cyan-soft);
+  --btn-bg-hover: rgb(120 251 231 / 0.16);
+  color: var(--cyan);
+}
+.lasso-btn.on :deep(.icon) {
+  color: var(--cyan);
+}
+.segmented.by {
   flex: none;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  color: var(--text-2);
-  transition:
-    border-color 0.15s var(--ease),
-    background-color 0.15s var(--ease),
-    color 0.15s var(--ease);
+  padding: 2px;
 }
-.area-btn:hover {
-  border-color: #3a4e5f;
-  color: var(--text);
+.segmented.by button {
+  height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
 }
-.area-btn.on {
-  border-color: var(--cyan-dim);
+.segmented.by button[aria-pressed='true'] {
   background: var(--cyan-soft);
   color: var(--cyan);
+  box-shadow: inset 0 0 0 1px rgb(120 251 231 / 0.35);
 }
 .area-chip {
   display: flex;

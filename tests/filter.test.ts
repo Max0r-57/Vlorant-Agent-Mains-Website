@@ -87,6 +87,15 @@ describe('area search and hidden lineups', () => {
     expect(filterLineups(withLanding, { area: null }, ctx, now)).toHaveLength(3)
   })
 
+  it('can search by lineup position instead of landing', () => {
+    const r = filterLineups(withLanding, { area: square, areaBy: 'position' }, ctx, now)
+    // 站位（x, y）都在 (0, 0)~(500, 500) 以内：in 和 out 的站位是 (0, 0)，none 是 (500, 500)
+    expect(r.map((l) => l.id)).toEqual(['in', 'out', 'none'])
+    const far = [make({ id: 'far', x: 5000, y: 5000, landing: { x: 10, y: 10, delay: null } })]
+    expect(filterLineups(far, { area: square, areaBy: 'position' }, ctx, now)).toHaveLength(0)
+    expect(filterLineups(far, { area: square, areaBy: 'landing' }, ctx, now)).toHaveLength(1)
+  })
+
   it('excludes hidden lineups', () => {
     expect(filterLineups(withLanding, { excludeIds: ['out'] }, ctx, now).map((l) => l.id)).toEqual(['in', 'none'])
   })

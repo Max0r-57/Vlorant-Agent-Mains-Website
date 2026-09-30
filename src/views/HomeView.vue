@@ -62,7 +62,7 @@ const drawerSidebar = useMediaQuery('(max-width: 900px)')
 
 /**
  * 地图的交互模式：
- * normal 浏览 / 新建；lasso 区域搜索（圈画）；paths 编辑新建 Lineup 的路径；rehearsal 现场演练
+ * normal 浏览 / 新建；lasso 圈画搜索；paths 编辑新建 Lineup 的路径；rehearsal 现场演练
  */
 type Mode = 'normal' | 'lasso' | 'paths' | 'rehearsal'
 const mode = ref<Mode>('normal')
@@ -76,7 +76,14 @@ const results = computed(() =>
   sortLineups(
     filterLineups(
       scoped.value,
-      { query: query.value, typeIds: typeIds.value, time: time.value, area: area.value, excludeIds: hiddenIds.value },
+      {
+        query: query.value,
+        typeIds: typeIds.value,
+        time: time.value,
+        area: area.value,
+        areaBy: prefs.areaSearchBy,
+        excludeIds: hiddenIds.value,
+      },
       { typeName: store.typeName },
     ),
     'createdAt',
@@ -138,9 +145,9 @@ const previewLineup = computed(() => {
   if (!g || mode.value !== 'normal' || creating.value || !popAnchor.value) return null
   return g.items.find((l) => l.id === previewId.value) ?? g.items[0] ?? null
 })
-/** 区域搜索时，显示结果的落点 */
+/** 按落点圈画搜索时，显示结果的落点 */
 const areaLandings = computed(() =>
-  area.value && mode.value !== 'rehearsal'
+  area.value && prefs.areaSearchBy === 'landing' && mode.value !== 'rehearsal'
     ? results.value.filter((l) => l.landing && l.id !== previewLineup.value?.id)
     : [],
 )
@@ -364,7 +371,7 @@ async function exitPaths() {
 
 useLayer(() => mode.value === 'paths', exitPaths)
 
-// ---------- 区域搜索（在地图上圈画） ----------
+// ---------- 圈画搜索（在地图上圈出范围） ----------
 const lasso = useStroke(() => canvas.value?.pxPerUnit())
 let sidebarBeforeLasso = true
 
@@ -404,7 +411,7 @@ function finishLasso(pos: Position) {
 
 useLayer(() => mode.value === 'lasso', cancelLasso)
 
-// 画笔事件分发给路径编辑或区域搜索
+// 画笔事件分发给路径编辑或圈画搜索
 type DrawPayload = { pos: Position; clientX: number; clientY: number }
 function onDrawStart(p: DrawPayload) {
   if (mode.value === 'paths') drawing.onStart(p)
@@ -563,6 +570,7 @@ const mapPadding = computed(() =>
         v-model:type-ids="typeIds"
         v-model:time="time"
         v-model:area="area"
+        v-model:area-by="prefs.areaSearchBy"
         v-model:hidden-ids="hiddenIds"
         :results="results"
         :total="scoped.length"
@@ -650,11 +658,11 @@ const mapPadding = computed(() =>
           </template>
 
           <template v-else>
-            <!-- 区域搜索的范围 -->
+            <!-- 圈画搜索的范围 -->
             <AreaLayer v-if="mode === 'lasso' && lasso.points.value" :points="lasso.points.value" :px="px" :size="size" />
             <AreaLayer v-else-if="area" :points="area" :px="px" :size="size" closed />
 
-            <!-- 区域搜索结果的落点 -->
+            <!-- 按落点圈画搜索时，结果的落点 -->
             <LandingMarker
               v-for="l in areaLandings"
               :key="`area-${l.id}`"
@@ -762,7 +770,10 @@ const mapPadding = computed(() =>
           </div>
           <div v-else-if="mode === 'lasso'" class="hud hud-hint mode-hint" data-map-ui>
             <Icon name="pen" :size="15" />
-            <span>按住<b>左键</b>在地图上圈出范围，松开后搜索范围内的落点 · <b>右键</b>拖动平移 · Esc 取消</span>
+            <span>
+              按住<b>左键</b>在地图上圈出范围，松开后搜索范围内的{{ prefs.areaSearchBy === 'landing' ? '落点' : '站位' }}
+              · <b>右键</b>拖动平移 · Esc 取消
+            </span>
             <button type="button" class="btn btn-sm btn-ghost" @click="cancelLasso">取消</button>
           </div>
           <div v-else-if="mode === 'paths'" class="hud hud-hint mode-hint path-hint" data-map-ui>

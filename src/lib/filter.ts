@@ -27,8 +27,10 @@ export interface LineupFilter {
   /** 为空数组表示全部类型 */
   typeIds?: string[]
   time?: TimeFilter
-  /** 区域搜索：只保留落点在这个多边形内的 Lineup（没有落点的不算） */
+  /** 圈画搜索：只保留在这个多边形内的 Lineup */
   area?: readonly Position[] | null
+  /** landing：按落点搜索（没有落点的不算，默认）；position：按站位（Lineup 位置）搜索 */
+  areaBy?: 'landing' | 'position'
   /** 手动隐藏的 Lineup */
   excludeIds?: readonly string[]
 }
@@ -96,6 +98,11 @@ export function matchesQuery(l: Lineup, tokens: string[], ctx: SearchContext = {
   return tokens.every((t) => haystack.includes(t))
 }
 
+function inArea(l: Lineup, area: readonly Position[], by: 'landing' | 'position') {
+  if (by === 'position') return pointInPolygon(l, area)
+  return !!l.landing && pointInPolygon(l.landing, area)
+}
+
 export function filterLineups(
   lineups: readonly Lineup[],
   filter: LineupFilter,
@@ -115,7 +122,7 @@ export function filterLineups(
       (!excluded || !excluded.has(l.id)) &&
       (from === null || l.createdAt >= from) &&
       (to === null || l.createdAt <= to) &&
-      (!area || (!!l.landing && pointInPolygon(l.landing, area))) &&
+      (!area || inArea(l, area, filter.areaBy ?? 'landing')) &&
       matchesQuery(l, tokens, ctx),
   )
 }
