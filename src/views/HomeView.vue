@@ -126,6 +126,10 @@ function landingColor(agentId: string) {
 const pop = useMarkerPopover()
 const viewTick = ref(0)
 const hoverResultKey = ref<string | null>(null)
+/**
+ * 选中的 Lineup：点击圆点或搜索结果时选中。点击地图空白处只收起预览卡片，
+ * 选中状态保留，地图上继续显示它的站位、落点和路径，直到点左下角「取消选中」。
+ */
 const activeId = ref<string | null>(null)
 const highlightKey = ref<string | null>(null)
 let highlightTimer = 0
@@ -140,19 +144,51 @@ const popAnchor = computed(() => {
 })
 /** 预览窗口当前显示的 Lineup：在地图上同时显示它的落点和路径 */
 const previewId = ref<string | null>(null)
+/** 选中的 Lineup（被搜索条件隐藏时不显示） */
+const selectedLineup = computed(() => {
+  if (!activeId.value || (mode.value !== 'normal' && mode.value !== 'lasso')) return null
+  return results.value.find((l) => l.id === activeId.value) ?? null
+})
+const selectedKey = computed(() => (selectedLineup.value ? posKey(selectedLineup.value) : null))
 const previewLineup = computed(() => {
   const g = popGroup.value
   if (!g || mode.value !== 'normal' || creating.value || !popAnchor.value) return null
-  return g.items.find((l) => l.id === previewId.value) ?? g.items[0] ?? null
+  const l = g.items.find((item) => item.id === previewId.value) ?? g.items[0] ?? null
+  // 选中的 Lineup 已经单独显示
+  return l && l.id !== selectedLineup.value?.id ? l : null
 })
 /** 按落点圈画搜索时，显示结果的落点 */
 const areaLandings = computed(() =>
   area.value && prefs.areaSearchBy === 'landing' && mode.value !== 'rehearsal'
-    ? results.value.filter((l) => l.landing && l.id !== previewLineup.value?.id)
+    ? results.value.filter(
+        (l) => l.landing && l.id !== previewLineup.value?.id && l.id !== selectedLineup.value?.id,
+      )
     : [],
 )
 
 useLayer(() => !!pop.state.value, pop.close)
+
+/** 预览卡片切换到另一张（同一位置有多个 Lineup 时左右滑动）：固定的卡片同时改变选中 */
+function onPopoverCurrent(id: string) {
+  previewId.value = id
+  if (pop.state.value?.pinned) activeId.value = id
+}
+
+function clearSelection() {
+  activeId.value = null
+  pop.close()
+}
+
+/** 重新打开选中 Lineup 的预览卡片 */
+function reopenSelected() {
+  const l = selectedLineup.value
+  if (!l) return
+  canvas.value?.focusOn(l)
+  pop.pin(posKey(l), l.id)
+}
+
+// 收起预览卡片后，Esc 取消选中
+useLayer(() => !!selectedLineup.value && !pop.state.value && mode.value === 'normal', clearSelection)
 
 function highlight(key: string) {
   highlightKey.value = null
@@ -189,7 +225,14 @@ function onMarkerLeave(e: PointerEvent) {
 }
 function onMarkerClick(key: string) {
   // 新建面板打开时不弹出预览（双击圆点 = 在相同位置新建）
-  if (!creating.value && mode.value === 'normal') pop.toggle(key)
+  if (creating.value || mode.value !== 'normal') return
+  pop.toggle(key)
+  // 固定了预览卡片：选中卡片上显示的 Lineup（再次点击同一个圆点只收起卡片，保持选中）
+  const state = pop.state.value
+  const g = groupByKey.value.get(key)
+  if (!state?.pinned || !g) return
+  const shown = g.items.find((l) => l.id === previewId.value) ?? g.items.find((l) => l.id === state.focusId)
+  activeId.value = (shown ?? g.items[0]!).id
 }
 
 /** 隐藏某个 Lineup（地图和搜索结果中都不再显示） */
@@ -671,6 +714,17 @@ const mapPadding = computed(() =>
               :color="landingColor(l.agentId)"
               :label="`${l.name} 的落点`"
             />
+            <!-- 选中的 Lineup：收起预览卡片后也继续显示它的落点和路径 -->
+            <template v-if="selectedLineup">
+              <LandingMarker
+                v-if="selectedLineup.landing"
+                :style="at(selectedLineup.landing)"
+                :diameter="landingDiameter(selectedLineup.agentId, size.w)"
+                :color="landingColor(selectedLineup.agentId)"
+                :label="`${selectedLineup.name} 的落点`"
+              />
+              <PathLayer v-if="selectedLineup.paths.length" :paths="selectedLineup.paths" show-numbers :px="px" :size="size" />
+            </template>
             <!-- 预览窗口中的 Lineup：显示它的落点和路径 -->
             <template v-if="previewLineup">
               <LandingMarker
@@ -717,7 +771,8 @@ const mapPadding = computed(() =>
                 :count="g.items.length"
                 :size="markerPx"
                 :highlight="highlightKey === g.key"
-                :selected="pop.state.value?.key === g.key || hoverResultKey === g.key"
+                :selected="pop.state.value?.key === g.key || hoverResultKey === g.key || selectedKey === g.key"
+                :ring="selectedKey === g.key"
                 :label="g.items.length > 1 ? `此位置有 ${g.items.length} 个 Lineup` : g.items[0]!.name"
                 @pointerenter="onMarkerEnter($event, g.key)"
                 @pointerleave="onMarkerLeave"
@@ -780,6 +835,17 @@ const mapPadding = computed(() =>
             <Icon name="route" :size="15" />
             <span>路径编辑：按住<b>左键</b>画线，松开完成一条路径 · 点击路径选中 · <b>右键</b>拖动平移</span>
           </div>
+          <div v-else-if="selectedLineup" class="hud hud-selection" data-map-ui>
+            <i class="sel-dot" :style="{ background: store.typeColor(selectedLineup.typeId) }" />
+            <span class="sel-label">已选中</span>
+            <button type="button" class="sel-name ellipsis" title="显示预览卡片" @click="reopenSelected">
+              {{ selectedLineup.name }}
+            </button>
+            <button type="button" class="btn btn-sm btn-outline" @click="clearSelection">
+              <Icon name="x" :size="14" />
+              取消选中
+            </button>
+          </div>
           <div v-else-if="!prefs.hintDismissed" class="hud hud-hint" data-map-ui>
             <Icon name="info" :size="15" />
             <span><b>双击</b>地图新建 Lineup · 滚轮缩放 · 拖动平移 · 悬停圆点预览</span>
@@ -814,7 +880,7 @@ const mapPadding = computed(() =>
       @leave="pop.popoverLeave()"
       @detail="openDetail"
       @rehearse="startRehearsal"
-      @current="(id) => (previewId = id)"
+      @current="onPopoverCurrent"
       @create-same="createAt(popGroup)"
     />
 
@@ -977,6 +1043,46 @@ const mapPadding = computed(() =>
 .hud-bottom {
   left: 16px;
   bottom: 14px;
+}
+/* 选中 Lineup 时左下角的「取消选中」 */
+.hud-selection {
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 90px);
+  padding: 5px 5px 5px 12px;
+  border: 1px solid rgb(120 251 231 / 0.4);
+  border-radius: var(--r);
+  background: rgb(13 20 25 / 0.9);
+  backdrop-filter: blur(6px);
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+}
+.sel-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff;
+}
+.sel-label {
+  flex: none;
+  color: var(--text-3);
+}
+.sel-name {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+}
+.sel-name:hover {
+  color: var(--cyan);
 }
 .mode-hint {
   border-color: rgb(120 251 231 / 0.35);

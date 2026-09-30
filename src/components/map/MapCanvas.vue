@@ -628,7 +628,9 @@ defineExpose({
     </div>
     <slot name="overlay" :scale="view.scale" />
     <Transition name="fade">
-      <div v-if="wheelHint" class="wheel-hint" aria-hidden="true">按住 <span class="kbd">Ctrl</span> 并滚动鼠标滚轮来缩放地图</div>
+      <div v-if="wheelHint" class="wheel-hint" aria-hidden="true">
+        按住 <span class="kbd">Ctrl</span> 并滚动鼠标滚轮来缩放地图
+      </div>
     </Transition>
   </div>
 </template>
@@ -678,16 +680,26 @@ defineExpose({
   height: 100%;
   pointer-events: none;
 }
+/* 滚轮缩放提示：地图中央的一个小提示框，不遮住整张地图 */
 .wheel-hint {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
   z-index: 20;
-  display: grid;
-  place-items: center;
-  background: rgb(5 8 11 / 0.55);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: rgb(13 20 25 / 0.9);
+  backdrop-filter: blur(6px);
+  box-shadow: var(--shadow-pop);
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 .fade-enter-active,

@@ -21,6 +21,8 @@ withDefaults(
     snapTarget?: boolean
     /** 当前打开了预览窗口 */
     selected?: boolean
+    /** 选中的 Lineup：外面加一圈青色光环 */
+    ring?: boolean
     dragging?: boolean
     label?: string
   }>(),
@@ -37,6 +39,7 @@ withDefaults(
     :style="{ '--c': color, '--d': `${variant === 'stack' || variant === 'active-stack' ? size + 4 : size}px` }"
     :aria-label="label"
   >
+    <span v-if="ring" class="ring" />
     <span class="core">
       <span v-if="(variant === 'stack' || variant === 'active-stack') && count > 1" class="count">
         {{ count > 99 ? '99+' : count }}
@@ -159,6 +162,18 @@ withDefaults(
   border: 2px solid #fff;
   border-radius: 50%;
   animation: ripple 1.4s ease-out infinite;
+  pointer-events: none;
+}
+
+/* 选中：青色光环 */
+.ring {
+  position: absolute;
+  inset: -7px;
+  border: 2px solid var(--cyan);
+  border-radius: 50%;
+  box-shadow:
+    0 0 10px rgb(120 251 231 / 0.55),
+    inset 0 0 6px rgb(120 251 231 / 0.35);
   pointer-events: none;
 }
 

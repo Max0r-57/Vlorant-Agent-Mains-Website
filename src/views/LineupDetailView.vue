@@ -324,7 +324,7 @@ watch(
           v-model="form.note"
           class="textarea note"
           maxlength="2000"
-          placeholder="站位、瞄点、出手时机、注意事项……"
+          placeholder="来源、站位、瞄点、出手时机、注意事项……"
           @input="autoGrow"
         />
       </section>
