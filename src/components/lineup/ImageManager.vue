@@ -88,6 +88,14 @@ function onPaste(e: ClipboardEvent) {
   ui.toast(`已从剪贴板添加 ${files.length} 张图片`, { kind: 'info' })
 }
 
+// 新建面板暂时隐藏时（例如编辑路径）不接收粘贴
+watch(
+  () => props.listenPaste,
+  (on) => {
+    if (on) window.addEventListener('paste', onPaste)
+    else window.removeEventListener('paste', onPaste)
+  },
+)
 onMounted(() => {
   if (props.listenPaste) window.addEventListener('paste', onPaste)
 })

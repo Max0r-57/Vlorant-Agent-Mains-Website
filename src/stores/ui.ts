@@ -14,11 +14,16 @@ export interface ConfirmOptions {
   message?: string
   confirmText?: string
   cancelText?: string
+  /** 第三个按钮（例如「不保存」），只在 choose() 中使用 */
+  altText?: string
   danger?: boolean
 }
 
+/** confirm：点了确认；alt：点了第三个按钮；cancel：取消、按 Esc 或点遮罩 */
+export type ConfirmResult = 'confirm' | 'alt' | 'cancel'
+
 interface ConfirmState extends ConfirmOptions {
-  resolve: (ok: boolean) => void
+  resolve: (result: ConfirmResult) => void
 }
 
 export interface LightboxState {
@@ -67,18 +72,23 @@ export const useUi = defineStore('ui', () => {
     return id
   }
 
-  function confirm(opts: ConfirmOptions) {
+  /** 三选一的确认框（确认 / 第三个按钮 / 取消） */
+  function choose(opts: ConfirmOptions) {
     // 同一时间只保留一个确认框
-    confirmState.value?.resolve(false)
-    return new Promise<boolean>((resolve) => {
+    confirmState.value?.resolve('cancel')
+    return new Promise<ConfirmResult>((resolve) => {
       confirmState.value = { ...opts, resolve }
     })
   }
 
-  function settleConfirm(ok: boolean) {
+  function confirm(opts: ConfirmOptions) {
+    return choose({ ...opts, altText: undefined }).then((r) => r === 'confirm')
+  }
+
+  function settleConfirm(result: ConfirmResult | boolean) {
     const state = confirmState.value
     confirmState.value = null
-    state?.resolve(ok)
+    state?.resolve(result === true ? 'confirm' : result === false ? 'cancel' : result)
   }
 
   return {
@@ -93,6 +103,7 @@ export const useUi = defineStore('ui', () => {
     toast,
     dismissToast,
     confirm,
+    choose,
     settleConfirm,
   }
 })

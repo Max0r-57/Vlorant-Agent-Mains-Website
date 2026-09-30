@@ -23,15 +23,20 @@ const props = withDefaults(
     /** 详情页中标出当前 Lineup */
     currentId?: string | null
     showCreate?: boolean
+    /** 有路径的 Lineup 显示「现场演练」按钮（首页） */
+    showRehearse?: boolean
   }>(),
-  { radius: 10, focusId: null, currentId: null, showCreate: true },
+  { radius: 10, focusId: null, currentId: null, showCreate: true, showRehearse: false },
 )
 const emit = defineEmits<{
   enter: []
   leave: []
   close: []
   detail: [id: string]
+  rehearse: [id: string]
   'create-same': []
+  /** 当前显示的卡片（多个 Lineup 时随滑动变化） */
+  current: [id: string]
 }>()
 
 const store = useLineups()
@@ -44,6 +49,14 @@ const index = ref(0)
 const isStack = computed(() => props.lineups.length > 1)
 const CARD_W = 236
 const GAP = 10
+
+watch(
+  () => props.lineups[index.value]?.id,
+  (id) => {
+    if (id) emit('current', id)
+  },
+  { immediate: true },
+)
 
 function place() {
   const el = root.value
@@ -240,15 +253,26 @@ function openImages(l: Lineup) {
               <span class="date tabular">{{ formatShort(l.createdAt) }}</span>
             </div>
             <p v-if="l.note" class="note">{{ l.note }}</p>
-            <button
-              v-if="l.id !== currentId"
-              type="button"
-              class="btn btn-sm btn-outline detail-btn"
-              @click="emit('detail', l.id)"
-            >
-              详情
-              <Icon name="chevronRight" :size="14" />
-            </button>
+            <div v-if="l.id !== currentId || (showRehearse && l.paths.length)" class="btn-row">
+              <button
+                v-if="l.id !== currentId"
+                type="button"
+                class="btn btn-sm btn-outline detail-btn"
+                @click="emit('detail', l.id)"
+              >
+                详情
+                <Icon name="chevronRight" :size="14" />
+              </button>
+              <button
+                v-if="showRehearse && l.paths.length"
+                type="button"
+                class="btn btn-sm btn-outline rehearse-btn"
+                @click="emit('rehearse', l.id)"
+              >
+                <Icon name="play" :size="12" />
+                现场演练
+              </button>
+            </div>
           </div>
         </article>
       </div>
@@ -439,10 +463,22 @@ function openImages(l: Lineup) {
   -webkit-box-orient: vertical;
   white-space: pre-line;
 }
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .detail-btn {
-  align-self: flex-start;
   gap: 2px;
   padding-right: 6px;
+}
+.rehearse-btn {
+  gap: 5px;
+  border-color: rgb(120 251 231 / 0.4);
+  color: var(--cyan);
+}
+.rehearse-btn:hover:not(:disabled) {
+  background: var(--cyan-soft);
 }
 .foot {
   display: flex;

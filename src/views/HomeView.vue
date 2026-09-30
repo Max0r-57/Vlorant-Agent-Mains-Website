@@ -3,24 +3,38 @@ import { computed, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { AGENT_BY_ID } from '@/data/agents'
-import { MAPS, MAP_BY_ID } from '@/data/maps'
+import { landingSpec } from '@/data/landing'
+import { MAPS, MAP_BY_ID, mapWidthMeters } from '@/data/maps'
 import { useLayer } from '@/composables/useLayer'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 import { useMarkerPopover } from '@/composables/useMarkerPopover'
+import { createPathEditor } from '@/composables/usePathEditor'
+import { pickPathAt, usePathDrawing, useStroke } from '@/composables/usePathDrawing'
+import { usePointerDrag } from '@/composables/usePointerDrag'
+import { useRehearsal } from '@/composables/useRehearsal'
 import { filterLineups, sortLineups } from '@/lib/filter'
+import { boundsOf, mapMetric, polygonArea, roundPos, simplifyPath } from '@/lib/geometry'
 import { groupByPosition, posKey, type MarkerGroup } from '@/lib/positions'
 import { useHomeFilters } from '@/stores/homeFilters'
 import { useLineups } from '@/stores/lineups'
 import { MARKER_PX, usePrefs } from '@/stores/prefs'
 import { useUi } from '@/stores/ui'
-import type { Lineup, Position } from '@/types'
+import { POS_MAX, type Landing, type Lineup, type LineupPath, type Position } from '@/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import Icon from '@/components/common/Icon.vue'
 import HomeSidebar from '@/components/home/HomeSidebar.vue'
 import CreateLineupPanel from '@/components/lineup/CreateLineupPanel.vue'
-import MapCanvas from '@/components/map/MapCanvas.vue'
+import PathEditorPanel from '@/components/lineup/PathEditorPanel.vue'
+import AreaLayer from '@/components/map/AreaLayer.vue'
+import LandingCountdown from '@/components/map/LandingCountdown.vue'
+import LandingMarker from '@/components/map/LandingMarker.vue'
+import MapCanvas, { type ViewState } from '@/components/map/MapCanvas.vue'
 import MapMarker from '@/components/map/MapMarker.vue'
 import MarkerPopover from '@/components/map/MarkerPopover.vue'
+import PathLayer from '@/components/map/PathLayer.vue'
+import RehearsalControls from '@/components/map/RehearsalControls.vue'
+import RehearsalDot from '@/components/map/RehearsalDot.vue'
+import RehearsalTimers from '@/components/map/RehearsalTimers.vue'
 
 defineOptions({ name: 'HomeView' })
 
@@ -30,14 +44,28 @@ const ui = useUi()
 const router = useRouter()
 const route = useRoute()
 const filters = useHomeFilters()
-const { query, typeIds, time } = storeToRefs(filters)
+const { query, typeIds, time, area, hiddenIds } = storeToRefs(filters)
 
 const canvas = ref<InstanceType<typeof MapCanvas>>()
 const sidebar = ref<InstanceType<typeof HomeSidebar>>()
+const createPanel = ref<InstanceType<typeof CreateLineupPanel>>()
 
 const map = computed(() => MAP_BY_ID.get(prefs.mapId) ?? MAPS[0]!)
 const agent = computed(() => AGENT_BY_ID.get(prefs.agentId))
 const markerPx = computed(() => MARKER_PX[prefs.markerSize])
+/** 地图比例尺：图片宽度对应的米数 */
+const widthMeters = computed(() => mapWidthMeters(map.value.id))
+const metric = computed(() => mapMetric(widthMeters.value, canvas.value?.aspect ?? 1))
+const narrow = useMediaQuery('(max-width: 640px)')
+/** 导览栏是浮在地图上的抽屉（小屏幕） */
+const drawerSidebar = useMediaQuery('(max-width: 900px)')
+
+/**
+ * 地图的交互模式：
+ * normal 浏览 / 新建；lasso 区域搜索（圈画）；paths 编辑新建 Lineup 的路径；rehearsal 现场演练
+ */
+type Mode = 'normal' | 'lasso' | 'paths' | 'rehearsal'
+const mode = ref<Mode>('normal')
 
 // ---------- 数据 ----------
 /** 当前地图 + 当前英雄的全部 Lineup */
@@ -46,7 +74,11 @@ const scoped = computed(() =>
 )
 const results = computed(() =>
   sortLineups(
-    filterLineups(scoped.value, { query: query.value, typeIds: typeIds.value, time: time.value }, { typeName: store.typeName }),
+    filterLineups(
+      scoped.value,
+      { query: query.value, typeIds: typeIds.value, time: time.value, area: area.value, excludeIds: hiddenIds.value },
+      { typeName: store.typeName },
+    ),
     'createdAt',
     'desc',
   ),
@@ -74,6 +106,15 @@ function markerVariant(g: MarkerGroup<Lineup>) {
   return g.items.length > 1 ? 'stack' : 'single'
 }
 
+/** 英雄的落点图案在屏幕上的直径（像素）；没有技能范围的英雄为 null（显示通用落点标记） */
+function landingDiameter(agentId: string, mapW: number) {
+  const spec = landingSpec(agentId)
+  return spec ? (spec.diameter / widthMeters.value) * mapW : null
+}
+function landingColor(agentId: string) {
+  return landingSpec(agentId)?.color
+}
+
 // ---------- 预览窗口 ----------
 const pop = useMarkerPopover()
 const viewTick = ref(0)
@@ -90,6 +131,19 @@ const popAnchor = computed(() => {
   if (!canvas.value.isPosVisible(g, 4)) return null
   return canvas.value.posToClient(g)
 })
+/** 预览窗口当前显示的 Lineup：在地图上同时显示它的落点和路径 */
+const previewId = ref<string | null>(null)
+const previewLineup = computed(() => {
+  const g = popGroup.value
+  if (!g || mode.value !== 'normal' || creating.value || !popAnchor.value) return null
+  return g.items.find((l) => l.id === previewId.value) ?? g.items[0] ?? null
+})
+/** 区域搜索时，显示结果的落点 */
+const areaLandings = computed(() =>
+  area.value && mode.value !== 'rehearsal'
+    ? results.value.filter((l) => l.landing && l.id !== previewLineup.value?.id)
+    : [],
+)
 
 useLayer(() => !!pop.state.value, pop.close)
 
@@ -104,13 +158,16 @@ function highlight(key: string) {
 
 /** 点击搜索结果：在地图上定位并弹出预览 */
 function focusLineup(id: string) {
+  if (mode.value === 'rehearsal') endRehearsal(false)
+  if (mode.value === 'lasso') cancelLasso()
+  if (mode.value !== 'normal') return
   const g = groups.value.find((gr) => gr.items.some((l) => l.id === id))
   if (!g) return
   activeId.value = id
   canvas.value?.focusOn(g)
   pop.pin(g.key, id)
   highlight(g.key)
-  if (window.matchMedia('(max-width: 900px)').matches) prefs.sidebarOpen = false
+  if (drawerSidebar.value) prefs.sidebarOpen = false
 }
 
 function openDetail(id: string) {
@@ -118,14 +175,21 @@ function openDetail(id: string) {
 }
 
 function onMarkerEnter(e: PointerEvent, key: string) {
-  if (e.pointerType === 'mouse' && !creating.value) pop.hoverEnter(key)
+  if (e.pointerType === 'mouse' && !creating.value && mode.value === 'normal') pop.hoverEnter(key)
 }
 function onMarkerLeave(e: PointerEvent) {
   if (e.pointerType === 'mouse') pop.hoverLeave()
 }
 function onMarkerClick(key: string) {
   // 新建面板打开时不弹出预览（双击圆点 = 在相同位置新建）
-  if (!creating.value) pop.toggle(key)
+  if (!creating.value && mode.value === 'normal') pop.toggle(key)
+}
+
+/** 隐藏某个 Lineup（地图和搜索结果中都不再显示） */
+function hideLineup(id: string) {
+  if (!hiddenIds.value.includes(id)) hiddenIds.value = [...hiddenIds.value, id]
+  if (activeId.value === id) activeId.value = null
+  hoverResultKey.value = null
 }
 
 // ---------- 新建 ----------
@@ -133,6 +197,10 @@ interface CreateState {
   pos: Position
   anchor: { x: number; y: number }
   stackCount: number
+  /** 落点参照（未开启时为 null） */
+  landing: Landing | null
+  paths: LineupPath[]
+  showPaths: boolean
 }
 const creating = ref<CreateState | null>(null)
 
@@ -141,10 +209,13 @@ function countAt(pos: Position) {
 }
 
 function openCreate(pos: Position, anchor: { x: number; y: number }) {
+  if (mode.value !== 'normal') return
   pop.close()
   const next = { pos, anchor, stackCount: countAt(pos) }
   // 面板已打开时只移动位置，保留已填写的内容
-  creating.value = creating.value ? { ...creating.value, ...next } : next
+  creating.value = creating.value
+    ? { ...creating.value, ...next }
+    : { ...next, landing: null, paths: [], showPaths: true }
 }
 
 function onMapDblClick(payload: { pos: Position; clientX: number; clientY: number }) {
@@ -171,22 +242,276 @@ function onSaved(lineup: Lineup) {
   }
 }
 
-function onBackgroundClick() {
-  pop.close()
+/** 落点的初始位置：地图可视区域的中间；被新建面板挡住时，放到面板旁边空间较大的一侧 */
+function landingStartPos(): Position {
+  const cv = canvas.value
+  if (!cv) return { x: POS_MAX / 2, y: POS_MAX / 2 }
+  const center = cv.centerPos()
+  const panel = createPanel.value?.rect()
+  if (!panel) return center
+  const c = cv.posToClient(center)
+  const pad = 40
+  if (c.x < panel.left - pad || c.x > panel.right + pad || c.y < panel.top - pad || c.y > panel.bottom + pad) {
+    return center
+  }
+  // 可见的地图范围：视口和地图图片的交集
+  const vp = (cv.$el as HTMLElement).getBoundingClientRect()
+  const left = Math.max(vp.left, cv.posToClient({ x: 0, y: 0 }).x)
+  const right = Math.min(vp.right, cv.posToClient({ x: POS_MAX, y: POS_MAX }).x)
+  const leftSpace = panel.left - left
+  const rightSpace = right - panel.right
+  if (Math.max(leftSpace, rightSpace) < 80) return center
+  const x = leftSpace >= rightSpace ? (left + panel.left) / 2 : (panel.right + right) / 2
+  return cv.clientToPos(x, c.y).pos
 }
+
+function toggleCreateLanding(on: boolean) {
+  const c = creating.value
+  if (!c) return
+  c.landing = on ? { ...roundPos(landingStartPos()), delay: null } : null
+}
+
+let landingGrab = { x: 0, y: 0 }
+const landingDrag = usePointerDrag({
+  start(e) {
+    const l = creating.value?.landing
+    if (!l || !canvas.value || mode.value !== 'normal') return false
+    const p = canvas.value.clientToPos(e.clientX, e.clientY).pos
+    // 保持按下的位置与圆心的相对距离，拖动时圆不会跳
+    landingGrab = { x: l.x - p.x, y: l.y - p.y }
+  },
+  move(e) {
+    const c = creating.value
+    if (!c?.landing || !canvas.value) return
+    const p = canvas.value.clientToPos(e.clientX, e.clientY).pos
+    c.landing = { ...c.landing, ...roundPos({ x: p.x + landingGrab.x, y: p.y + landingGrab.y }) }
+  },
+})
+
+function onBackgroundClick(e: { clientX: number; clientY: number }) {
+  pop.close()
+  // 点击新建中的路径：进入路径编辑并选中它
+  const c = creating.value
+  if (mode.value !== 'normal' || !c?.showPaths || !c.paths.length || !canvas.value) return
+  const { pos } = canvas.value.clientToPos(e.clientX, e.clientY)
+  const hit = pickPathAt(c.paths, pos, canvas.value.pxPerUnit())
+  if (hit) enterPathMode(hit)
+}
+
+// ---------- 路径编辑（新建 Lineup 时） ----------
+const editor = createPathEditor()
+const drawing = usePathDrawing({
+  editor,
+  scale: () => canvas.value?.pxPerUnit(),
+  anchors: () => (creating.value ? [creating.value.pos] : []),
+})
+const invalidPathIds = computed(() => (editor.tried ? editor.paths.filter((p) => !p.mode).map((p) => p.id) : []))
+let sidebarBeforePaths = true
+
+function enterPathMode(selectId: string | null = null) {
+  const c = creating.value
+  if (!c || mode.value !== 'normal') return
+  pop.close()
+  editor.start(c.paths, selectId)
+  sidebarBeforePaths = prefs.sidebarOpen
+  // 路径编辑面板放在导览栏的位置
+  prefs.sidebarOpen = true
+  mode.value = 'paths'
+}
+
+function leavePathMode() {
+  drawing.onCancel()
+  mode.value = 'normal'
+  prefs.sidebarOpen = sidebarBeforePaths
+}
+
+async function finishPaths() {
+  const c = creating.value
+  if (!c) return leavePathMode()
+  const error = editor.validate()
+  if (error) {
+    ui.toast(error, { kind: 'error' })
+    return
+  }
+  if (!editor.paths.length) {
+    const ok = await ui.confirm({
+      title: '删除全部路径？',
+      message: '这个 Lineup 将不再有路径追踪。',
+      confirmText: '删除',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  c.paths = editor.result()
+  c.showPaths = true
+  leavePathMode()
+}
+
+async function exitPaths() {
+  if (editor.dirty) {
+    const choice = await ui.choose({
+      title: '保存画好的路径？',
+      message: '选择「不保存」会放弃这次对路径的修改。',
+      confirmText: '保存路径',
+      altText: '不保存',
+      cancelText: '继续编辑',
+    })
+    if (choice === 'cancel') return
+    if (choice === 'confirm') return finishPaths()
+  }
+  leavePathMode()
+}
+
+useLayer(() => mode.value === 'paths', exitPaths)
+
+// ---------- 区域搜索（在地图上圈画） ----------
+const lasso = useStroke(() => canvas.value?.pxPerUnit())
+let sidebarBeforeLasso = true
+
+function toggleLasso() {
+  if (mode.value === 'lasso') return cancelLasso()
+  if (mode.value === 'rehearsal') endRehearsal(false)
+  if (mode.value !== 'normal') return
+  pop.close()
+  mode.value = 'lasso'
+  sidebarBeforeLasso = prefs.sidebarOpen
+  // 小屏幕上导览栏会挡住地图
+  if (drawerSidebar.value) prefs.sidebarOpen = false
+}
+
+function cancelLasso() {
+  lasso.cancel()
+  mode.value = 'normal'
+  if (drawerSidebar.value) prefs.sidebarOpen = sidebarBeforeLasso
+}
+
+function finishLasso(pos: Position) {
+  lasso.add(pos)
+  const raw = lasso.finish()
+  const s = canvas.value?.pxPerUnit()
+  if (!raw || !s) return
+  const polygon = simplifyPath(raw, 1.5, s).map(roundPos)
+  if (polygon.length < 3 || polygonArea(polygon, s) < 600) {
+    ui.toast('圈出的范围太小，请按住左键画一个闭合的圈', { kind: 'info' })
+    return
+  }
+  area.value = polygon
+  activeId.value = null
+  mode.value = 'normal'
+  // 在导览栏中显示搜索结果
+  prefs.sidebarOpen = true
+}
+
+useLayer(() => mode.value === 'lasso', cancelLasso)
+
+// 画笔事件分发给路径编辑或区域搜索
+type DrawPayload = { pos: Position; clientX: number; clientY: number }
+function onDrawStart(p: DrawPayload) {
+  if (mode.value === 'paths') drawing.onStart(p)
+  else if (mode.value === 'lasso') lasso.begin(p.pos)
+}
+function onDrawMove(p: DrawPayload) {
+  if (mode.value === 'paths') drawing.onMove(p)
+  else if (mode.value === 'lasso') lasso.add(p.pos)
+}
+function onDrawEnd(p: DrawPayload) {
+  if (mode.value === 'paths') drawing.onEnd(p)
+  else if (mode.value === 'lasso') finishLasso(p.pos)
+}
+function onDrawCancel() {
+  drawing.onCancel()
+  lasso.cancel()
+}
+function onDrawTap(p: DrawPayload) {
+  if (mode.value === 'paths') drawing.onTap(p)
+}
+function onDrawHover(p: DrawPayload | null) {
+  if (mode.value === 'paths') drawing.onHover(p)
+}
+
+// ---------- 现场演练 ----------
+const rehearsal = useRehearsal()
+const rehearsalId = ref<string | null>(null)
+const rehearsalLineup = computed(() => (rehearsalId.value ? store.lineupById.get(rehearsalId.value) : undefined))
+/** 演练前的状态，结束演练时恢复 */
+let beforeRehearsal: {
+  view: ViewState
+  pop: { key: string; focusId: string | null } | null
+  sidebarOpen: boolean
+} | null = null
+
+const rehearsalLandingVisible = computed(() => {
+  if (!rehearsal.landing) return false
+  return !rehearsal.landingState || rehearsal.landingState.phase !== 'flight'
+})
+
+function startRehearsal(id: string) {
+  const l = store.lineupById.get(id)
+  if (!l?.paths.length || !canvas.value) return
+  if (mode.value === 'lasso') cancelLasso()
+  if (mode.value === 'paths') return
+  if (mode.value !== 'rehearsal') {
+    const ps = pop.state.value
+    beforeRehearsal = {
+      view: canvas.value.getViewState(),
+      pop: ps?.pinned ? { key: ps.key, focusId: ps.focusId } : null,
+      sidebarOpen: prefs.sidebarOpen,
+    }
+  }
+  pop.close()
+  hoverResultKey.value = null
+  mode.value = 'rehearsal'
+  rehearsalId.value = id
+  if (drawerSidebar.value) prefs.sidebarOpen = false
+  const points: Position[] = [l, ...l.paths.flatMap((p) => p.points), ...(l.landing ? [l.landing] : [])]
+  const moved = canvas.value.fitBounds(boundsOf(points)!, 70)
+  rehearsal.start({
+    paths: l.paths,
+    landing: l.landing,
+    agentId: l.agentId,
+    metric: metric.value,
+    leadIn: moved ? 0.6 : 0.35,
+  })
+}
+
+/** 结束演练；restore 为 true 时回到演练开始前的地图视图和预览窗口 */
+function endRehearsal(restore = true) {
+  if (mode.value !== 'rehearsal') return
+  rehearsal.stop()
+  rehearsalId.value = null
+  mode.value = 'normal'
+  const before = beforeRehearsal
+  beforeRehearsal = null
+  if (!before) return
+  if (drawerSidebar.value) prefs.sidebarOpen = before.sidebarOpen
+  if (restore && canvas.value) {
+    canvas.value.restoreView(before.view)
+    if (before.pop && groupByKey.value.has(before.pop.key)) pop.pin(before.pop.key, before.pop.focusId)
+  }
+}
+
+useLayer(() => mode.value === 'rehearsal', () => endRehearsal())
 
 // 切换地图 / 英雄时关闭浮层
 watch(
-  () => [prefs.mapId, prefs.agentId],
-  () => {
+  () => [prefs.mapId, prefs.agentId] as const,
+  ([mapId], [oldMapId]) => {
     pop.close()
+    endRehearsal(false)
+    if (mode.value === 'lasso') cancelLasso()
+    if (mode.value === 'paths') leavePathMode()
     creating.value = null
     activeId.value = null
+    // 圈出的范围只对原来的地图有意义
+    if (mapId !== oldMapId) area.value = null
   },
 )
 
 onDeactivated(() => {
   pop.close()
+  endRehearsal(false)
+  if (mode.value === 'lasso') cancelLasso()
+  if (mode.value === 'paths') leavePathMode()
   creating.value = null
 })
 
@@ -210,7 +535,7 @@ watch(
 
 // 按 / 聚焦搜索框
 function onKeydown(e: KeyboardEvent) {
-  if (e.key !== '/' || e.ctrlKey || e.metaKey) return
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || mode.value !== 'normal') return
   const t = e.target as HTMLElement
   if (t.closest('input, textarea, [contenteditable]')) return
   e.preventDefault()
@@ -221,34 +546,48 @@ function onKeydown(e: KeyboardEvent) {
 onActivated(() => window.addEventListener('keydown', onKeydown))
 onDeactivated(() => window.removeEventListener('keydown', onKeydown))
 
-const narrow = useMediaQuery('(max-width: 640px)')
 const mapPadding = computed(() =>
   narrow.value ? { top: 72, right: 12, bottom: 64, left: 12 } : { top: 76, right: 72, bottom: 40, left: 40 },
 )
 </script>
 
 <template>
-  <div class="home" :class="{ 'sidebar-open': prefs.sidebarOpen }">
+  <div class="home" :class="[`mode-${mode}`, { 'sidebar-open': prefs.sidebarOpen }]">
     <div class="sidebar-wrap">
       <HomeSidebar
+        v-show="mode !== 'paths'"
         ref="sidebar"
         v-model:map-id="prefs.mapId"
         v-model:agent-id="prefs.agentId"
         v-model:query="query"
         v-model:type-ids="typeIds"
         v-model:time="time"
+        v-model:area="area"
+        v-model:hidden-ids="hiddenIds"
         :results="results"
         :total="scoped.length"
         :active-id="activeId"
         :map-counts="mapCounts"
         :agent-counts="agentCounts"
         :type-counts="typeCounts"
+        :lasso-active="mode === 'lasso'"
         @focus="focusLineup"
         @detail="openDetail"
         @hover="(id) => (hoverResultKey = id ? posKey(store.lineupById.get(id)!) : null)"
+        @rehearse="startRehearsal"
+        @hide="hideLineup"
+        @area-search="toggleLasso"
         @collapse="prefs.sidebarOpen = false"
         @settings="ui.openSettings()"
         @dictionary="router.push({ name: 'dict' })"
+      />
+      <PathEditorPanel
+        v-if="mode === 'paths'"
+        :editor="editor"
+        :metric="metric"
+        context="新建 Lineup"
+        @finish="finishPaths"
+        @exit="exitPaths"
       />
     </div>
     <div class="sidebar-backdrop" @click="prefs.sidebarOpen = false" />
@@ -259,9 +598,16 @@ const mapPadding = computed(() =>
         :src="map.image"
         :view-key="map.id"
         :padding="mapPadding"
+        :tool="mode === 'lasso' || mode === 'paths' ? 'draw' : 'pan'"
         @map-dblclick="onMapDblClick"
         @background-click="onBackgroundClick"
         @view-change="viewTick++"
+        @draw-start="onDrawStart"
+        @draw-move="onDrawMove"
+        @draw-end="onDrawEnd"
+        @draw-cancel="onDrawCancel"
+        @draw-tap="onDrawTap"
+        @draw-hover="onDrawHover"
       >
         <template #background>
           <img
@@ -274,24 +620,106 @@ const mapPadding = computed(() =>
           />
         </template>
 
-        <template #default="{ at }">
-          <MapMarker
-            v-for="g in groups"
-            :key="g.key"
-            :style="at(g)"
-            :variant="markerVariant(g)"
-            :color="store.typeColor(g.items[0]!.typeId)"
-            :count="g.items.length"
-            :size="markerPx"
-            :highlight="highlightKey === g.key"
-            :selected="pop.state.value?.key === g.key || hoverResultKey === g.key"
-            :label="g.items.length > 1 ? `此位置有 ${g.items.length} 个 Lineup` : g.items[0]!.name"
-            @pointerenter="onMarkerEnter($event, g.key)"
-            @pointerleave="onMarkerLeave"
-            @click="onMarkerClick(g.key)"
-            @dblclick.stop="createAt(g)"
-          />
-          <MapMarker v-if="creating" variant="pending" :style="at(creating.pos)" color="#ff4655" :size="markerPx" />
+        <template #default="{ at, px, size }">
+          <!-- 现场演练：只显示这个 Lineup 相关的图案 -->
+          <template v-if="mode === 'rehearsal' && rehearsalLineup">
+            <LandingMarker
+              v-if="rehearsal.landing && rehearsalLandingVisible"
+              :style="at(rehearsal.landing)"
+              :diameter="landingDiameter(rehearsalLineup.agentId, size.w)"
+              :color="landingColor(rehearsalLineup.agentId)"
+              :dim="rehearsal.landingState?.phase === 'done'"
+            />
+            <PathLayer :paths="rehearsalLineup.paths" :px="px" :size="size" />
+            <MapMarker
+              variant="single"
+              :style="at(rehearsalLineup)"
+              :color="store.typeColor(rehearsalLineup.typeId)"
+              :size="markerPx"
+              :label="rehearsalLineup.name"
+            />
+            <LandingCountdown
+              v-if="rehearsal.landing && rehearsal.landingState && rehearsal.spec"
+              :style="at(rehearsal.landing)"
+              :phase="rehearsal.landingState.phase"
+              :remaining="rehearsal.landingState.remaining"
+              :label="rehearsal.spec.label"
+              :offset="(landingDiameter(rehearsalLineup.agentId, size.w) ?? 0) / 2"
+            />
+            <RehearsalDot v-if="rehearsal.dot" :style="at(rehearsal.dot)" :moving="rehearsal.moving" />
+          </template>
+
+          <template v-else>
+            <!-- 区域搜索的范围 -->
+            <AreaLayer v-if="mode === 'lasso' && lasso.points.value" :points="lasso.points.value" :px="px" :size="size" />
+            <AreaLayer v-else-if="area" :points="area" :px="px" :size="size" closed />
+
+            <!-- 区域搜索结果的落点 -->
+            <LandingMarker
+              v-for="l in areaLandings"
+              :key="`area-${l.id}`"
+              :style="at(l.landing!)"
+              :diameter="landingDiameter(l.agentId, size.w)"
+              :color="landingColor(l.agentId)"
+              :label="`${l.name} 的落点`"
+            />
+            <!-- 预览窗口中的 Lineup：显示它的落点和路径 -->
+            <template v-if="previewLineup">
+              <LandingMarker
+                v-if="previewLineup.landing"
+                :style="at(previewLineup.landing)"
+                :diameter="landingDiameter(previewLineup.agentId, size.w)"
+                :color="landingColor(previewLineup.agentId)"
+              />
+              <PathLayer v-if="previewLineup.paths.length" :paths="previewLineup.paths" variant="preview" :px="px" :size="size" />
+            </template>
+
+            <!-- 新建中的落点和路径 -->
+            <template v-if="creating">
+              <LandingMarker
+                v-if="creating.landing"
+                :style="at(creating.landing)"
+                :diameter="landingDiameter(prefs.agentId, size.w)"
+                :color="landingColor(prefs.agentId)"
+                :draggable="mode === 'normal'"
+                :dragging="landingDrag.dragging.value"
+                @pointerdown="landingDrag.onDown"
+              />
+              <PathLayer
+                v-if="mode === 'paths'"
+                variant="edit"
+                show-numbers
+                :paths="editor.paths"
+                :selected-id="editor.selectedId"
+                :stroke="drawing.stroke.value"
+                :invalid-ids="invalidPathIds"
+                :px="px"
+                :size="size"
+              />
+              <PathLayer v-else-if="creating.showPaths && creating.paths.length" :paths="creating.paths" show-numbers :px="px" :size="size" />
+            </template>
+
+            <div class="markers" :class="{ dim: mode !== 'normal' }">
+              <MapMarker
+                v-for="g in groups"
+                :key="g.key"
+                :style="at(g)"
+                :variant="markerVariant(g)"
+                :color="store.typeColor(g.items[0]!.typeId)"
+                :count="g.items.length"
+                :size="markerPx"
+                :highlight="highlightKey === g.key"
+                :selected="pop.state.value?.key === g.key || hoverResultKey === g.key"
+                :label="g.items.length > 1 ? `此位置有 ${g.items.length} 个 Lineup` : g.items[0]!.name"
+                @pointerenter="onMarkerEnter($event, g.key)"
+                @pointerleave="onMarkerLeave"
+                @click="onMarkerClick(g.key)"
+                @dblclick.stop="createAt(g)"
+              />
+            </div>
+            <MapMarker v-if="creating" variant="pending" :style="at(creating.pos)" color="#ff4655" :size="markerPx" />
+            <span v-if="mode === 'paths' && drawing.snapHint.value" class="snap-ring" :style="at(drawing.snapHint.value)" />
+          </template>
         </template>
 
         <template #overlay>
@@ -311,7 +739,13 @@ const mapPadding = computed(() =>
                 {{ map.name }}
                 <small v-if="map.en">{{ map.en }}</small>
               </h1>
-              <p class="subtitle">
+              <p v-if="mode === 'rehearsal' && rehearsalLineup" class="subtitle rehearsal-sub">
+                <Icon name="play" :size="12" />
+                现场演练
+                <span class="dot-sep" />
+                <span class="ellipsis rehearsal-name">{{ rehearsalLineup.name }}</span>
+              </p>
+              <p v-else class="subtitle">
                 <AgentAvatar :agent-id="prefs.agentId" :size="18" />
                 {{ agent?.name }}
                 <span class="dot-sep" />
@@ -319,10 +753,23 @@ const mapPadding = computed(() =>
                 <template v-else>{{ scoped.length }} 个 Lineup</template>
                 <button v-if="filters.active" type="button" class="link" @click="filters.clear()">清除筛选</button>
               </p>
+              <RehearsalTimers v-if="mode === 'rehearsal'" class="timers" :elapsed="rehearsal.travel" />
             </div>
           </div>
 
-          <div v-if="!prefs.hintDismissed" class="hud hud-hint" data-map-ui>
+          <div v-if="mode === 'rehearsal'" class="hud hud-bottom" data-map-ui>
+            <RehearsalControls :finished="rehearsal.finished" @restart="rehearsal.restart()" @exit="endRehearsal()" />
+          </div>
+          <div v-else-if="mode === 'lasso'" class="hud hud-hint mode-hint" data-map-ui>
+            <Icon name="pen" :size="15" />
+            <span>按住<b>左键</b>在地图上圈出范围，松开后搜索范围内的落点 · <b>右键</b>拖动平移 · Esc 取消</span>
+            <button type="button" class="btn btn-sm btn-ghost" @click="cancelLasso">取消</button>
+          </div>
+          <div v-else-if="mode === 'paths'" class="hud hud-hint mode-hint path-hint" data-map-ui>
+            <Icon name="route" :size="15" />
+            <span>路径编辑：按住<b>左键</b>画线，松开完成一条路径 · 点击路径选中 · <b>右键</b>拖动平移</span>
+          </div>
+          <div v-else-if="!prefs.hintDismissed" class="hud hud-hint" data-map-ui>
             <Icon name="info" :size="15" />
             <span><b>双击</b>地图新建 Lineup · 滚轮缩放 · 拖动平移 · 悬停圆点预览</span>
             <button type="button" class="hint-close" aria-label="不再提示" @click="prefs.hintDismissed = true">
@@ -346,24 +793,37 @@ const mapPadding = computed(() =>
     </main>
 
     <MarkerPopover
-      v-if="popGroup && popAnchor && !creating"
+      v-if="popGroup && popAnchor && !creating && mode === 'normal'"
       :lineups="popGroup.items"
       :anchor="popAnchor"
       :radius="markerPx / 2 + 4"
       :focus-id="pop.state.value?.focusId"
+      show-rehearse
       @enter="pop.popoverEnter()"
       @leave="pop.popoverLeave()"
       @detail="openDetail"
+      @rehearse="startRehearsal"
+      @current="(id) => (previewId = id)"
       @create-same="createAt(popGroup)"
     />
 
     <CreateLineupPanel
       v-if="creating"
+      ref="createPanel"
       :anchor="creating.anchor"
       :pos="creating.pos"
       :map-id="prefs.mapId"
       :agent-id="prefs.agentId"
       :stack-count="creating.stackCount"
+      :landing="creating.landing"
+      :paths="creating.paths"
+      :show-paths="creating.showPaths"
+      :metric="metric"
+      :hidden="mode === 'paths' || mode === 'rehearsal'"
+      @toggle-landing="toggleCreateLanding"
+      @update:landing="(v) => creating && (creating.landing = v)"
+      @update:show-paths="(v) => creating && (creating.showPaths = v)"
+      @edit-paths="enterPathMode()"
       @saved="onSaved"
       @cancel="creating = null"
     />
@@ -502,6 +962,53 @@ const mapPadding = computed(() =>
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.hud-bottom {
+  left: 16px;
+  bottom: 14px;
+}
+.mode-hint {
+  border-color: rgb(120 251 231 / 0.35);
+  color: var(--text);
+}
+.mode-hint :deep(.icon) {
+  color: var(--cyan);
+}
+.path-hint {
+  border-color: rgb(61 139 255 / 0.5);
+}
+.path-hint :deep(.icon),
+.path-hint b {
+  color: #7cb2ff;
+}
+.rehearsal-sub {
+  color: var(--cyan);
+  font-weight: 600;
+}
+.rehearsal-name {
+  max-width: 320px;
+  color: var(--text);
+}
+.timers {
+  margin-top: 10px;
+}
+.markers {
+  transition: opacity 0.2s var(--ease);
+}
+.markers.dim {
+  opacity: 0.35;
+}
+/* 画路径时的吸附提示 */
+.snap-ring {
+  position: absolute;
+  z-index: 5;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #7cb2ff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(61 139 255 / 0.25);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 @media (max-width: 900px) {

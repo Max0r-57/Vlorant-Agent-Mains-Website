@@ -4,6 +4,7 @@ import * as repo from '@/db/repo'
 import { applyBackup, type ParsedBackup } from '@/db/backup'
 import { releaseAllImages, releaseImages } from '@/lib/imageCache'
 import { newId } from '@/lib/id'
+import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
 import type { Lineup, LineupDraft, LineupType, StoredImage } from '@/types'
 
 /** 首次使用时自动创建的类型，之后可以在设置里改名、改色或删除 */
@@ -30,6 +31,13 @@ export const TYPE_COLORS = [
 ]
 
 const FALLBACK_TYPE = { name: '未分类', color: '#94a3b8' }
+
+/** 旧版本保存的 Lineup 没有落点和路径字段，读取时补上默认值 */
+function normalizeLineup(l: Lineup): Lineup {
+  const landing = sanitizeLanding(l.landing)
+  const paths = sanitizePaths(l.paths)
+  return { ...l, landing, paths }
+}
 
 export const useLineups = defineStore('lineups', () => {
   const lineups = ref<Lineup[]>([])
@@ -82,7 +90,7 @@ export const useLineups = defineStore('lineups', () => {
 
   async function load() {
     const data = await repo.loadAll()
-    lineups.value = data.lineups
+    lineups.value = data.lineups.map(normalizeLineup)
     types.value = data.types
     if (!types.value.length && !(await repo.getMeta<boolean>('seeded'))) {
       const now = Date.now()
@@ -125,6 +133,8 @@ export const useLineups = defineStore('lineups', () => {
       ...draft,
       id: newId('lu'),
       imageIds: images.map((i) => i.id),
+      landing: plainLanding(draft.landing),
+      paths: plainPaths(draft.paths),
       createdAt: now,
       updatedAt: now,
     }
@@ -148,6 +158,8 @@ export const useLineups = defineStore('lineups', () => {
       ...old,
       ...patch,
       imageIds: images ? images.imageIds : old.imageIds,
+      landing: plainLanding(patch.landing === undefined ? old.landing : patch.landing),
+      paths: plainPaths(patch.paths ?? old.paths),
       updatedAt: Date.now(),
     }
     const removed = images ? old.imageIds.filter((i) => !images.imageIds.includes(i)) : []
