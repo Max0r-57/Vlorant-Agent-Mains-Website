@@ -332,7 +332,7 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
             class="textarea"
             rows="3"
             maxlength="2000"
-            placeholder="站位、瞄点、出手时机、注意事项……"
+            placeholder="来源、站位、瞄点、出手时机、注意事项……"
           />
         </label>
       </form>
