@@ -16,6 +16,8 @@ function make(p: Partial<Lineup>): Lineup {
     y: 0,
     imageIds: [],
     note: '',
+    landing: null,
+    paths: [],
     createdAt: now,
     updatedAt: now,
     ...p,
@@ -63,6 +65,30 @@ describe('filterLineups', () => {
     const [from, to] = resolveTimeRange({ preset: 'custom', from: '2026-09-01' }, now)
     expect(from).toBe(new Date(2026, 8, 1).getTime())
     expect(to).toBeNull()
+  })
+})
+
+describe('area search and hidden lineups', () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 1000, y: 0 },
+    { x: 1000, y: 1000 },
+    { x: 0, y: 1000 },
+  ]
+  const withLanding = [
+    make({ id: 'in', landing: { x: 500, y: 500, delay: null } }),
+    make({ id: 'out', landing: { x: 5000, y: 500, delay: null } }),
+    // 位置在圈里、但没有落点：不算
+    make({ id: 'none', x: 500, y: 500 }),
+  ]
+
+  it('keeps only lineups whose landing point is inside the drawn area', () => {
+    expect(filterLineups(withLanding, { area: square }, ctx, now).map((l) => l.id)).toEqual(['in'])
+    expect(filterLineups(withLanding, { area: null }, ctx, now)).toHaveLength(3)
+  })
+
+  it('excludes hidden lineups', () => {
+    expect(filterLineups(withLanding, { excludeIds: ['out'] }, ctx, now).map((l) => l.id)).toEqual(['in', 'none'])
   })
 })
 

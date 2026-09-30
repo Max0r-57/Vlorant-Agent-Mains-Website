@@ -12,7 +12,18 @@ export interface MapDef {
   en?: string
   /** 图片地址（自动根据 id 匹配） */
   image: string
+  /** 图片宽度对应的游戏内距离（米），不填则使用 DEFAULT_MAP_WIDTH_METERS */
+  widthMeters?: number
 }
+
+/**
+ * 地图比例尺（用于燃烧弹范围、路径长度和现场演练）。
+ *
+ * 以亚海悬城 B 大厅为参照：两侧墙之间 20 米，在 1065 像素宽的地图图片上约 150 像素，
+ * 所以整张图片宽约 1065 ÷ 150 × 20 = 142 米。其他地图沿用同一比例；
+ * 如果某张地图的比例不同，在下面的列表里给它单独加上 widthMeters 即可。
+ */
+export const DEFAULT_MAP_WIDTH_METERS = 142
 
 const MAP_LIST: Omit<MapDef, 'image'>[] = [
   { id: 'ascent', name: '亚海悬城', en: 'Ascent' },
@@ -46,4 +57,8 @@ export const DEFAULT_MAP_ID = MAPS[0]?.id ?? ''
 
 export function mapName(id: string) {
   return MAP_BY_ID.get(id)?.name ?? '未知地图'
+}
+
+export function mapWidthMeters(id: string) {
+  return MAP_BY_ID.get(id)?.widthMeters ?? DEFAULT_MAP_WIDTH_METERS
 }

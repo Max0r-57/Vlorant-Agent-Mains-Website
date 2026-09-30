@@ -6,9 +6,12 @@ import Icon from '@/components/common/Icon.vue'
 import TypeBadge from '@/components/common/TypeBadge.vue'
 import LineupThumb from './LineupThumb.vue'
 
-/** 导览栏搜索结果卡片：点击卡片在地图上定位，点「详情」进入详情页 */
+/**
+ * 导览栏搜索结果卡片：点击卡片在地图上定位，点「详情」进入详情页；
+ * 有路径时可以「现场演练」；右上角的小方框隐藏这个 Lineup。
+ */
 defineProps<{ lineup: Lineup; active?: boolean }>()
-const emit = defineEmits<{ focus: []; detail: []; hover: [on: boolean] }>()
+const emit = defineEmits<{ focus: []; detail: []; hover: [on: boolean]; rehearse: []; hide: [] }>()
 const store = useLineups()
 </script>
 
@@ -35,11 +38,34 @@ const store = useLineups()
       <div class="meta">
         <TypeBadge :type-id="lineup.typeId" size="sm" />
         <span class="date tabular">{{ formatShort(lineup.createdAt) }}</span>
+        <span v-if="lineup.landing" class="flag" title="有落点参照"><Icon name="target" :size="12" /></span>
       </div>
     </div>
-    <button type="button" class="btn btn-sm btn-outline detail" @click.stop="emit('detail')">
-      详情
-      <Icon name="chevronRight" :size="14" />
+    <div class="actions">
+      <button
+        v-if="lineup.paths.length"
+        type="button"
+        class="btn btn-sm btn-outline rehearse"
+        title="现场演练"
+        @click.stop="emit('rehearse')"
+      >
+        <Icon name="play" :size="12" />
+        演练
+      </button>
+      <button type="button" class="btn btn-sm btn-outline detail" @click.stop="emit('detail')">
+        详情
+        <Icon name="chevronRight" :size="14" />
+      </button>
+    </div>
+    <button
+      type="button"
+      class="hide"
+      title="隐藏该Lineup"
+      aria-label="隐藏该Lineup"
+      @click.stop="emit('hide')"
+      @keydown.stop
+    >
+      <Icon name="minus" :size="11" :stroke="2.6" />
     </button>
   </article>
 </template>
@@ -49,8 +75,8 @@ const store = useLineups()
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 8px 7px 7px;
+  gap: 9px;
+  padding: 7px 25px 7px 7px;
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--surface);
@@ -74,7 +100,7 @@ const store = useLineups()
 .thumb-wrap {
   position: relative;
   flex: none;
-  width: 84px;
+  width: 68px;
   height: 52px;
   overflow: hidden;
   border-radius: var(--r-sm);
@@ -130,9 +156,56 @@ const store = useLineups()
   color: var(--text-3);
   font-size: 11px;
 }
-.detail {
+.flag {
+  display: inline-flex;
   flex: none;
-  gap: 1px;
+  color: #7cb2ff;
+}
+.actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.actions .btn {
+  height: 24px;
+  gap: 2px;
   padding: 0 4px 0 8px;
+}
+.rehearse {
+  padding-right: 8px !important;
+  gap: 4px !important;
+  border-color: rgb(120 251 231 / 0.4);
+  color: var(--cyan);
+}
+.rehearse:hover:not(:disabled) {
+  background: var(--cyan-soft);
+}
+/* 右上角的小方框：隐藏该 Lineup */
+.hide {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--bg-elev);
+  color: var(--text-3);
+  transition:
+    color 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
+}
+.hide:hover,
+.hide:focus-visible {
+  border-color: rgb(255 92 92 / 0.6);
+  background: var(--danger-soft);
+  color: var(--danger);
+  outline: none;
 }
 </style>

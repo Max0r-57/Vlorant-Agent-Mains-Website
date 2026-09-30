@@ -2,21 +2,26 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useLayer } from '@/composables/useLayer'
 import { AGENT_BY_ID } from '@/data/agents'
+import { landingSpec } from '@/data/landing'
 import { MAP_BY_ID } from '@/data/maps'
 import { computePosition } from '@/lib/floating'
+import type { MapMetric } from '@/lib/geometry'
+import { buildRoute, formatDuration } from '@/lib/rehearsal'
 import { useLineups } from '@/stores/lineups'
 import { usePrefs } from '@/stores/prefs'
 import { useUi } from '@/stores/ui'
-import type { Lineup, Position } from '@/types'
+import type { Landing, Lineup, LineupPath, Position } from '@/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import Icon from '@/components/common/Icon.vue'
 import TypePicker from '@/components/common/TypePicker.vue'
+import DelayInput from './DelayInput.vue'
 import ImageManager from './ImageManager.vue'
 import { collectForSave, hasPendingImages, type EditableImage } from './editableImages'
 
 /**
  * 新建 Lineup 面板：在地图上双击的位置旁弹出。
  * 英雄、地图、位置自动取自当前选择，无需手动填写。
+ * 落点和路径画在首页地图上，由首页保存状态，面板只负责开关和显示。
  */
 const props = defineProps<{
   /** 双击位置的屏幕坐标（面板出现在它旁边） */
@@ -26,8 +31,24 @@ const props = defineProps<{
   pos: Position
   /** 相同位置新建时，该位置已有的 Lineup 数量 */
   stackCount?: number
+  /** 落点参照（未开启时为 null） */
+  landing: Landing | null
+  paths: LineupPath[]
+  showPaths: boolean
+  metric: MapMetric
+  /** 编辑路径或现场演练时暂时隐藏（保留已填写的内容） */
+  hidden?: boolean
 }>()
-const emit = defineEmits<{ saved: [lineup: Lineup]; cancel: [] }>()
+const emit = defineEmits<{
+  saved: [lineup: Lineup]
+  cancel: []
+  /** 打开 / 关闭落点参照（打开时由首页把落点放在地图中间） */
+  'toggle-landing': [on: boolean]
+  'update:landing': [landing: Landing]
+  'update:showPaths': [value: boolean]
+  /** 增加路径追踪 / 新增路径：进入路径编辑模式 */
+  'edit-paths': []
+}>()
 
 const store = useLineups()
 const { prefs } = usePrefs()
@@ -49,7 +70,15 @@ const map = computed(() => MAP_BY_ID.get(props.mapId))
 const nameError = computed(() => (tried.value && !name.value.trim() ? '请填写名字' : ''))
 const typeError = computed(() => (tried.value && !typeId.value ? '请选择或新建一个类型' : ''))
 const processing = computed(() => hasPendingImages(images.value))
-const dirty = computed(() => !!(name.value.trim() || note.value.trim() || images.value.length))
+const dirty = computed(
+  () => !!(name.value.trim() || note.value.trim() || images.value.length || props.landing || props.paths.length),
+)
+const spec = computed(() => landingSpec(props.agentId))
+const routeTime = computed(() => buildRoute(props.paths, props.metric).duration)
+
+function setDelay(delay: number | null) {
+  if (props.landing) emit('update:landing', { ...props.landing, delay })
+}
 
 // ---------- 位置 ----------
 const style = ref<Record<string, string>>({ left: '-9999px', top: '0px' })
@@ -125,6 +154,8 @@ async function save() {
         x: props.pos.x,
         y: props.pos.y,
         note: note.value.trim(),
+        landing: props.landing,
+        paths: props.paths,
       },
       newImages,
     )
@@ -150,7 +181,7 @@ async function cancel() {
   emit('cancel')
 }
 
-useLayer(() => true, cancel)
+useLayer(() => !props.hidden, cancel)
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -158,11 +189,15 @@ function onKeydown(e: KeyboardEvent) {
     save()
   }
 }
+
+/** 面板在屏幕上的位置（首页放置落点时避开面板） */
+defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClientRect() ?? null)) })
 </script>
 
 <template>
   <Teleport to="body">
     <section
+      v-show="!hidden"
       ref="panel"
       class="create-panel"
       :style="style"
@@ -221,9 +256,73 @@ function onKeydown(e: KeyboardEvent) {
           <span v-if="typeError" class="field-error">{{ typeError }}</span>
         </div>
 
+        <div class="extras">
+          <div class="extra">
+            <div class="extra-row">
+              <span class="extra-title">
+                <Icon name="target" :size="15" />
+                落点参照
+              </span>
+              <button
+                type="button"
+                class="switch"
+                role="switch"
+                :aria-checked="!!landing"
+                aria-label="落点参照"
+                @click="emit('toggle-landing', !landing)"
+              />
+            </div>
+            <template v-if="landing">
+              <label class="field delay">
+                <span class="field-label">落点时间<span class="field-hint">从出发到落地，现场演练时先倒数</span></span>
+                <DelayInput :model-value="landing.delay" @update:model-value="setDelay" />
+              </label>
+              <p class="extra-hint">
+                <template v-if="spec">
+                  拖动地图上的<b class="molly">红色圆形</b>摆放{{ spec.label }}落点（直径 {{ spec.diameter }} 米）
+                </template>
+                <template v-else>拖动地图上的<b class="molly">落点标记</b>摆放落点</template>
+              </p>
+            </template>
+          </div>
+
+          <div class="extra">
+            <div class="extra-row">
+              <span class="extra-title">
+                <Icon name="route" :size="15" />
+                路径追踪
+                <span v-if="paths.length" class="extra-meta tabular">
+                  {{ paths.length }} 条 · 约 {{ formatDuration(routeTime) }}
+                </span>
+              </span>
+              <button v-if="!paths.length" type="button" class="btn btn-sm btn-outline" @click="emit('edit-paths')">
+                <Icon name="plus" :size="14" />
+                增加路径追踪
+              </button>
+            </div>
+            <div v-if="paths.length" class="extra-row path-actions">
+              <label class="inline-switch">
+                <button
+                  type="button"
+                  class="switch"
+                  role="switch"
+                  :aria-checked="showPaths"
+                  aria-label="显示路径"
+                  @click="emit('update:showPaths', !showPaths)"
+                />
+                显示路径
+              </label>
+              <button type="button" class="btn btn-sm btn-outline" @click="emit('edit-paths')">
+                <Icon name="plus" :size="14" />
+                新增
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="field">
           <span class="field-label">图片<span class="field-hint">第一张为预览图</span></span>
-          <ImageManager v-model="images" compact :title="name || '新建 Lineup'" />
+          <ImageManager v-model="images" compact :listen-paste="!hidden" :title="name || '新建 Lineup'" />
         </div>
 
         <label class="field">
@@ -316,6 +415,65 @@ function onKeydown(e: KeyboardEvent) {
   min-height: 0;
   padding: 4px 16px 16px;
   overflow-y: auto;
+}
+.extras {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.extra {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.extra + .extra {
+  border-top: 1px solid var(--line);
+}
+.extra-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+.extra-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.extra-title :deep(.icon) {
+  color: var(--text-3);
+}
+.extra-meta {
+  color: #7cb2ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.extra-hint {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.extra-hint .molly {
+  color: #ff8a70;
+}
+.delay .input {
+  height: 32px;
+}
+.inline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 .foot {
   display: flex;

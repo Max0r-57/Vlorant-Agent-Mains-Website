@@ -1,4 +1,5 @@
 import { toRaw } from 'vue'
+import { plainLanding, plainPaths } from '@/lib/paths'
 import type { Lineup, LineupType, StoredImage } from '@/types'
 import { getDB } from './database'
 
@@ -8,7 +9,12 @@ import { getDB } from './database'
  */
 function plainLineup(l: Lineup): Lineup {
   const raw = toRaw(l)
-  return { ...raw, imageIds: [...toRaw(raw.imageIds)] }
+  return {
+    ...raw,
+    imageIds: [...toRaw(raw.imageIds)],
+    landing: plainLanding(raw.landing),
+    paths: plainPaths(raw.paths),
+  }
 }
 
 function plainType(t: LineupType): LineupType {

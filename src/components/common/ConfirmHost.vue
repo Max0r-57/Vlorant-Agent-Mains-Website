@@ -23,6 +23,9 @@ const state = computed(() => ui.confirmState)
       <button type="button" class="btn btn-ghost" :autofocus="!!state?.danger" @click="ui.settleConfirm(false)">
         {{ state?.cancelText ?? '取消' }}
       </button>
+      <button v-if="state?.altText" type="button" class="btn btn-outline" @click="ui.settleConfirm('alt')">
+        {{ state.altText }}
+      </button>
       <button
         type="button"
         class="btn"

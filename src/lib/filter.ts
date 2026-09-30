@@ -1,5 +1,6 @@
-import type { Lineup } from '@/types'
+import type { Lineup, Position } from '@/types'
 import { parseDateInput } from './format'
+import { pointInPolygon } from './geometry'
 
 export type TimePreset = 'all' | '7d' | '30d' | '90d' | 'custom'
 
@@ -26,6 +27,10 @@ export interface LineupFilter {
   /** 为空数组表示全部类型 */
   typeIds?: string[]
   time?: TimeFilter
+  /** 区域搜索：只保留落点在这个多边形内的 Lineup（没有落点的不算） */
+  area?: readonly Position[] | null
+  /** 手动隐藏的 Lineup */
+  excludeIds?: readonly string[]
 }
 
 const DAY = 24 * 60 * 60 * 1000
@@ -99,14 +104,18 @@ export function filterLineups(
 ): Lineup[] {
   const tokens = tokenize(filter.query)
   const types = filter.typeIds?.length ? new Set(filter.typeIds) : null
+  const excluded = filter.excludeIds?.length ? new Set(filter.excludeIds) : null
+  const area = filter.area && filter.area.length >= 3 ? filter.area : null
   const [from, to] = resolveTimeRange(filter.time, now)
   return lineups.filter(
     (l) =>
       (!filter.mapId || l.mapId === filter.mapId) &&
       (!filter.agentId || l.agentId === filter.agentId) &&
       (!types || types.has(l.typeId)) &&
+      (!excluded || !excluded.has(l.id)) &&
       (from === null || l.createdAt >= from) &&
       (to === null || l.createdAt <= to) &&
+      (!area || (!!l.landing && pointInPolygon(l.landing, area))) &&
       matchesQuery(l, tokens, ctx),
   )
 }

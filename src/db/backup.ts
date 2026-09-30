@@ -2,6 +2,7 @@ import { strFromU8, strToU8, unzip, zip, type Unzipped, type Zippable } from 'ff
 import { toRaw } from 'vue'
 import { POS_MAX, type Lineup, type LineupType, type StoredImage } from '@/types'
 import { extForMime } from '@/lib/image'
+import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
 import { getDB } from './database'
 
 /**
@@ -9,9 +10,12 @@ import { getDB } from './database'
  *   backup.json          类型、Lineup 和图片的元数据
  *   images/<id>.<ext>    原图
  *   thumbs/<id>.<ext>    缩略图
+ *
+ * 版本 2：Lineup 增加了落点参照（landing）和路径（paths）。
+ * 版本 1 的备份仍然可以导入（没有落点和路径）；旧版网站会拒绝导入版本 2 的备份，避免丢失路径数据。
  */
 export const BACKUP_FORMAT = 'valorant-lineup-notebook'
-export const BACKUP_VERSION = 1
+export const BACKUP_VERSION = 2
 
 interface ImageEntry {
   id: string
@@ -218,6 +222,8 @@ export async function parseBackup(file: Blob): Promise<ParsedBackup> {
         y: clampPos(l.y),
         imageIds: kept,
         note: str(l.note),
+        landing: sanitizeLanding(l.landing),
+        paths: sanitizePaths(l.paths),
         createdAt,
         updatedAt: num(l.updatedAt, createdAt),
       }
@@ -237,7 +243,10 @@ export async function applyBackup(input: ParsedBackup, mode: 'merge' | 'replace'
   const backup = toRaw(input)
   const types = toRaw(backup.types).map((t) => ({ ...toRaw(t) }))
   const images = toRaw(backup.images).map((i) => ({ ...toRaw(i) }))
-  let lineups = toRaw(backup.lineups).map((l) => ({ ...toRaw(l), imageIds: [...toRaw(l).imageIds] }))
+  let lineups = toRaw(backup.lineups).map((l) => {
+    const raw = toRaw(l)
+    return { ...raw, imageIds: [...toRaw(raw.imageIds)], landing: plainLanding(raw.landing), paths: plainPaths(raw.paths) }
+  })
 
   const db = await getDB()
   const tx = db.transaction(['types', 'lineups', 'images'], 'readwrite')

@@ -4,9 +4,10 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { AGENT_BY_ID } from '@/data/agents'
 import { MAP_BY_ID } from '@/data/maps'
 import { formatDateTime } from '@/lib/format'
+import { plainLanding, plainPaths } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
-import type { Lineup, Position } from '@/types'
+import type { Landing, Lineup, LineupPath, Position } from '@/types'
 import AgentPicker from '@/components/common/AgentPicker.vue'
 import BrandMark from '@/components/common/BrandMark.vue'
 import Icon from '@/components/common/Icon.vue'
@@ -20,7 +21,7 @@ import {
   type EditableImage,
 } from '@/components/lineup/editableImages'
 
-/** Lineup 详情页：查看并编辑名字、类型、英雄、图片、备注、地图和位置 */
+/** Lineup 详情页：查看并编辑名字、类型、英雄、图片、备注、地图、位置、落点参照和路径 */
 const route = useRoute()
 const router = useRouter()
 const store = useLineups()
@@ -36,9 +37,21 @@ interface Form {
   mapId: string
   pos: Position
   note: string
+  landing: Landing | null
+  paths: LineupPath[]
 }
-const form = reactive<Form>({ name: '', typeId: null, agentId: '', mapId: '', pos: { x: 0, y: 0 }, note: '' })
+const form = reactive<Form>({
+  name: '',
+  typeId: null,
+  agentId: '',
+  mapId: '',
+  pos: { x: 0, y: 0 },
+  note: '',
+  landing: null,
+  paths: [],
+})
 const images = ref<EditableImage[]>([])
+const positionEditor = ref<InstanceType<typeof PositionEditor>>()
 const baseline = ref('')
 const saving = ref(false)
 const tried = ref(false)
@@ -53,6 +66,8 @@ function snapshot() {
     x: form.pos.x,
     y: form.pos.y,
     note: form.note,
+    landing: plainLanding(form.landing),
+    paths: plainPaths(form.paths),
     images: images.value.map((i) => i.storedId ?? i.key),
   })
 }
@@ -65,13 +80,22 @@ function load(l: Lineup | undefined) {
   form.mapId = l.mapId
   form.pos = { x: l.x, y: l.y }
   form.note = l.note
+  form.landing = plainLanding(l.landing)
+  form.paths = plainPaths(l.paths)
   images.value = fromStored(l.imageIds)
   tried.value = false
   baseline.value = snapshot()
 }
 
-// 首次进入、或从一个 Lineup 跳到另一个时加载表单
-watch(id, () => load(lineup.value), { immediate: true })
+// 首次进入、或从一个 Lineup 跳到另一个时加载表单（同时退出路径编辑 / 现场演练）
+watch(
+  id,
+  () => {
+    positionEditor.value?.reset()
+    load(lineup.value)
+  },
+  { immediate: true },
+)
 
 const dirty = computed(() => !!lineup.value && baseline.value !== snapshot())
 const nameError = computed(() => (tried.value && !form.name.trim() ? '名字不能为空' : ''))
@@ -88,6 +112,10 @@ async function save() {
     ui.toast('图片还在处理中，请稍等', { kind: 'info' })
     return
   }
+  if (positionEditor.value?.isEditingPaths()) {
+    ui.toast('请先在地图左侧点「完成路径编辑」或退出路径编辑', { kind: 'info' })
+    return
+  }
   saving.value = true
   try {
     const saved = await store.updateLineup(
@@ -100,6 +128,8 @@ async function save() {
         x: form.pos.x,
         y: form.pos.y,
         note: form.note.trim(),
+        landing: form.landing,
+        paths: form.paths,
       },
       collectForSave(images.value),
     )
@@ -113,6 +143,7 @@ async function save() {
 }
 
 function revert() {
+  positionEditor.value?.reset()
   load(lineup.value)
 }
 
@@ -148,8 +179,12 @@ function openOther(otherId: string) {
 }
 
 // ---------- 离开前提醒保存 ----------
+function hasUnsaved() {
+  return dirty.value || !!positionEditor.value?.hasPendingPathEdits()
+}
+
 async function confirmLeave() {
-  if (skipGuard || !dirty.value) return true
+  if (skipGuard || !hasUnsaved()) return true
   return ui.confirm({
     title: '有未保存的修改',
     message: '离开后，本次修改（包括新上传的图片）将会丢失。',
@@ -162,7 +197,7 @@ onBeforeRouteLeave(confirmLeave)
 onBeforeRouteUpdate(confirmLeave)
 
 function onBeforeUnload(e: BeforeUnloadEvent) {
-  if (dirty.value) {
+  if (hasUnsaved()) {
     e.preventDefault()
     e.returnValue = ''
   }
@@ -297,12 +332,18 @@ watch(
       <section class="card">
         <header class="card-head">
           <h2>地图位置</h2>
-          <span class="card-hint">显示 {{ agent?.name }} 在该地图的全部 Lineup，黄色为当前 Lineup</span>
+          <span class="card-hint">
+            显示 {{ agent?.name }} 在该地图的全部 Lineup，黄色为当前 Lineup；落点参照、路径追踪和现场演练也在这张图里
+          </span>
         </header>
         <PositionEditor
+          ref="positionEditor"
           v-model:map-id="form.mapId"
           v-model:pos="form.pos"
+          v-model:landing="form.landing"
+          v-model:paths="form.paths"
           :lineup="lineup"
+          :lineup-name="form.name"
           :agent-id="form.agentId"
           @detail="openOther"
         />

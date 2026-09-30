@@ -2,11 +2,12 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { strToU8, zipSync } from 'fflate'
 import { useLineups } from '@/stores/lineups'
-import { resetDBConnection, DB_NAME } from '@/db/database'
+import { resetDBConnection, DB_NAME, getDB } from '@/db/database'
 import { exportBackup, parseBackup } from '@/db/backup'
 import * as repo from '@/db/repo'
-import type { StoredImage } from '@/types'
+import type { Lineup, LineupPath, StoredImage } from '@/types'
 
 function fakeImage(id: string, bytes = 32): StoredImage {
   return {
@@ -155,5 +156,116 @@ describe('lineup store', () => {
 
   it('rejects files that are not backups', async () => {
     await expect(parseBackup(new Blob(['hello']))).rejects.toThrow()
+  })
+})
+
+const samplePaths: LineupPath[] = [
+  { id: 'p1', name: '', mode: 'knife', points: [{ x: 100, y: 100 }, { x: 800, y: 100 }] },
+  { id: 'p2', name: '静步进点', mode: 'walk', points: [{ x: 800, y: 100 }, { x: 800, y: 500 }, { x: 900, y: 600 }] },
+]
+
+describe('landing reference and paths', () => {
+  it('saves landing and paths, including reactive proxies from the forms', async () => {
+    const store = useLineups()
+    await store.init()
+    const typeId = store.sortedTypes[0]!.id
+    // 首页新建面板里的落点和路径都是响应式对象
+    const draft = reactive({
+      name: '带路径',
+      typeId,
+      agentId: 'brimstone',
+      mapId: 'ascent',
+      x: 800,
+      y: 100,
+      note: '',
+      landing: { x: 1200, y: 300, delay: 2.5 },
+      paths: samplePaths,
+    })
+    const l = await store.createLineup(draft, [])
+    let fromDb = (await repo.loadAll()).lineups[0]!
+    expect(fromDb.landing).toEqual({ x: 1200, y: 300, delay: 2.5 })
+    expect(fromDb.paths).toEqual(samplePaths)
+
+    // 详情页修改：换落点、删掉一条路径
+    const form = reactive({ landing: { x: 10, y: 20, delay: null }, paths: [samplePaths[1]!] })
+    await store.updateLineup(l.id, form)
+    fromDb = (await repo.loadAll()).lineups[0]!
+    expect(fromDb.landing).toEqual({ x: 10, y: 20, delay: null })
+    expect(fromDb.paths.map((p) => p.id)).toEqual(['p2'])
+
+    // 只改名字时保留落点和路径；关掉落点参照时存为 null
+    await store.updateLineup(l.id, { name: '改名' })
+    expect(store.lineupById.get(l.id)?.paths).toHaveLength(1)
+    await store.updateLineup(l.id, { landing: null })
+    expect((await repo.loadAll()).lineups[0]!.landing).toBeNull()
+  })
+
+  it('reads lineups saved by older versions without landing / paths', async () => {
+    const old = {
+      id: 'lu_old',
+      name: '旧数据',
+      typeId: 'type_x',
+      agentId: 'brimstone',
+      mapId: 'ascent',
+      x: 1,
+      y: 2,
+      imageIds: [],
+      note: '',
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as Lineup
+    const db = await getDB()
+    await db.put('lineups', old)
+    const store = useLineups()
+    await store.init()
+    const l = store.lineupById.get('lu_old')!
+    expect(l.landing).toBeNull()
+    expect(l.paths).toEqual([])
+  })
+
+  it('round-trips landing and paths through a backup', async () => {
+    const store = useLineups()
+    await store.init()
+    await store.createLineup(
+      {
+        name: '备份路径',
+        typeId: store.sortedTypes[0]!.id,
+        agentId: 'brimstone',
+        mapId: 'ascent',
+        x: 800,
+        y: 100,
+        note: '',
+        landing: { x: 5, y: 6, delay: 1.5 },
+        paths: samplePaths,
+      },
+      [],
+    )
+    const { blob } = await exportBackup()
+    await store.clearAll()
+    await store.importBackup(await parseBackup(blob), 'replace')
+    expect(store.lineups[0]).toMatchObject({ landing: { x: 5, y: 6, delay: 1.5 }, paths: samplePaths })
+  })
+
+  it('imports version 1 backups (before landing / paths existed)', async () => {
+    const json = {
+      format: 'valorant-lineup-notebook',
+      version: 1,
+      exportedAt: 1,
+      types: [{ id: 't1', name: '燃烧弹', color: '#ff5a36', order: 0, createdAt: 1 }],
+      lineups: [
+        { id: 'l1', name: 'v1', typeId: 't1', agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, imageIds: [], note: '', createdAt: 1, updatedAt: 1 },
+      ],
+      images: [],
+    }
+    const zipped = zipSync({ 'backup.json': strToU8(JSON.stringify(json)) })
+    const parsed = await parseBackup(new Blob([zipped as Uint8Array<ArrayBuffer>]))
+    expect(parsed.lineups[0]).toMatchObject({ landing: null, paths: [] })
+  })
+
+  it('refuses backups from a newer site version', async () => {
+    const zipped = zipSync({
+      'backup.json': strToU8(JSON.stringify({ format: 'valorant-lineup-notebook', version: 99, lineups: [] })),
+    })
+    await expect(parseBackup(new Blob([zipped as Uint8Array<ArrayBuffer>]))).rejects.toThrow('更新版本')
   })
 })
