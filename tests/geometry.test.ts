@@ -18,8 +18,8 @@ describe('map scale', () => {
     // 150 / 1065 of the map width ≈ 1408 units
     const d = distanceMeters({ x: 2254, y: 4845 }, { x: 2254, y: 4845 + (150 / 1065) * 10000 }, m)
     expect(d).toBeCloseTo(20, 1)
-    // a 9 m molly is ≈ 6.3 % of the map width
-    expect((9 / DEFAULT_MAP_WIDTH_METERS) * 100).toBeCloseTo(6.34, 1)
+    // a 2 m molly is ≈ 1.4 % of the map width (≈ 15 px on the 1065 px image)
+    expect((2 / DEFAULT_MAP_WIDTH_METERS) * 1065).toBeCloseTo(15, 0)
   })
 
   it('keeps metres isotropic on non-square images', () => {
