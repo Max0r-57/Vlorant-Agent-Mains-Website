@@ -52,13 +52,25 @@ withDefaults(
   touch-action: none;
   transition: opacity 0.25s var(--ease);
 }
+/* 按真实大小显示范围（--d 由直径和地图比例尺换算而来，见 src/data/landing.ts） */
 .landing.area {
-  width: max(var(--d), 10px);
-  height: max(var(--d), 10px);
+  width: var(--d);
+  height: var(--d);
 }
 .landing.draggable {
   pointer-events: auto;
   cursor: grab;
+}
+/* 范围很小时也保证至少 24 像素的可拖动区域 */
+.landing.area.draggable::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
 }
 .landing.dragging {
   cursor: grabbing;
@@ -69,7 +81,7 @@ withDefaults(
 .fill {
   position: absolute;
   inset: 0;
-  border: 2px solid color-mix(in srgb, var(--c) 90%, #fff);
+  border: 1.5px solid color-mix(in srgb, var(--c) 90%, #fff);
   border-radius: 50%;
   background: radial-gradient(
     circle,
@@ -89,11 +101,11 @@ withDefaults(
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 6px;
-  height: 6px;
+  width: clamp(3px, calc(var(--d) * 0.2), 6px);
+  height: clamp(3px, calc(var(--d) * 0.2), 6px);
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1.5px var(--c);
+  box-shadow: 0 0 0 1px var(--c);
   transform: translate(-50%, -50%);
 }
 .target {

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { Position } from '@/types'
 
-/** 区域搜索圈出的范围（放在 MapCanvas 的默认插槽里）：画的时候是虚线，画完后闭合并填充 */
+/** 圈画搜索圈出的范围（放在 MapCanvas 的默认插槽里）：画的时候是虚线，画完后闭合并填充 */
 const props = defineProps<{
   points: readonly Position[]
   px: (pos: Position) => { x: number; y: number }

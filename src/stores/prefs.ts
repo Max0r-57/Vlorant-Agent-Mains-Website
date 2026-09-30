@@ -4,6 +4,7 @@ import { DEFAULT_AGENT_ID, AGENT_BY_ID } from '@/data/agents'
 import { DEFAULT_MAP_ID, MAP_BY_ID } from '@/data/maps'
 
 export type MarkerSize = 'sm' | 'md' | 'lg'
+export type AreaSearchBy = 'landing' | 'position'
 
 export interface Prefs {
   /** 首页当前地图 / 英雄（下次打开时恢复） */
@@ -21,6 +22,8 @@ export interface Prefs {
   hintDismissed: boolean
   /** 在地图空白处显示所选英雄的立绘 */
   showPortrait: boolean
+  /** 圈画搜索按落点还是按站位（Lineup 位置）搜索 */
+  areaSearchBy: AreaSearchBy
 }
 
 const STORAGE_KEY = 'lineup-notebook:prefs'
@@ -36,6 +39,7 @@ const DEFAULTS: Prefs = {
   lastTypeId: null,
   hintDismissed: false,
   showPortrait: true,
+  areaSearchBy: 'landing',
 }
 
 function load(): Prefs {
@@ -46,6 +50,7 @@ function load(): Prefs {
     // 配置里删掉的地图 / 英雄，退回默认值
     if (!MAP_BY_ID.has(prefs.mapId)) prefs.mapId = DEFAULT_MAP_ID
     if (!AGENT_BY_ID.has(prefs.agentId)) prefs.agentId = DEFAULT_AGENT_ID
+    if (prefs.areaSearchBy !== 'position') prefs.areaSearchBy = 'landing'
     return prefs
   } catch {
     return { ...DEFAULTS }
