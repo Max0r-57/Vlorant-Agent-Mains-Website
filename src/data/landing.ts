@@ -22,7 +22,7 @@ export interface LandingSpec {
 }
 
 const SPECS: Record<string, LandingSpec> = {
-  brimstone: { label: '燃烧弹', diameter: 5, duration: 7.5, color: '#ff4d2e' },
+  brimstone: { label: '燃烧弹', diameter: 6.5, duration: 7.5, color: '#ff4d2e' },
 }
 
 export function landingSpec(agentId: string): LandingSpec | undefined {
