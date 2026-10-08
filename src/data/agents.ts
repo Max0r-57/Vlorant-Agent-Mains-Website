@@ -34,6 +34,7 @@ const AGENT_LIST: Omit<AgentDef, 'avatar' | 'portrait'>[] = [
   { id: 'astra', name: '星隧', en: 'Astra', role: 'controller' },
   { id: 'harbor', name: '海神', en: 'Harbor', role: 'controller' },
   { id: 'clove', name: '暮蝶', en: 'Clove', role: 'controller' },
+  { id: 'miks', name: '迷核', en: 'Miks', role: 'controller' },
   // 决斗者
   { id: 'phoenix', name: '不死鸟', en: 'Phoenix', role: 'duelist' },
   { id: 'jett', name: '捷风', en: 'Jett', role: 'duelist' },
@@ -42,13 +43,14 @@ const AGENT_LIST: Omit<AgentDef, 'avatar' | 'portrait'>[] = [
   { id: 'yoru', name: '夜露', en: 'Yoru', role: 'duelist' },
   { id: 'neon', name: '霓虹', en: 'Neon', role: 'duelist' },
   { id: 'iso', name: '壹决', en: 'Iso', role: 'duelist' },
+  { id: 'waylay', name: '幻棱', en: 'Waylay', role: 'duelist' },
   // 先锋
   { id: 'sova', name: '猎枭', en: 'Sova', role: 'initiator' },
   { id: 'breach', name: '铁臂', en: 'Breach', role: 'initiator' },
   { id: 'skye', name: '斯凯', en: 'Skye', role: 'initiator' },
   { id: 'kayo', name: 'KO', en: 'KAY/O', role: 'initiator' },
   { id: 'fade', name: '黑梦', en: 'Fade', role: 'initiator' },
-  { id: 'gekko', name: '盖克', en: 'Gekko', role: 'initiator' },
+  { id: 'gekko', name: '盖可', en: 'Gekko', role: 'initiator' },
   { id: 'tejo', name: '钛狐', en: 'Tejo', role: 'initiator' },
   // 哨卫
   { id: 'sage', name: '贤者', en: 'Sage', role: 'sentinel' },

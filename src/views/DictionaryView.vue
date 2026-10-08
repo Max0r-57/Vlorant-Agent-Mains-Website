@@ -284,10 +284,15 @@ function openImages(l: Lineup) {
           >
             <span class="cell col-name" role="cell">
               <span class="icon-thumb">
-                <LineupThumb :image-id="l.imageIds[0]" :color="store.typeColor(l.typeId)" />
+                <LineupThumb
+                  :image-id="l.imageIds[0]"
+                  :color="store.typeColor(l.typeId)"
+                  :hover-play="false"
+                  badge="icon"
+                />
               </span>
               <span class="name ellipsis">{{ l.name }}</span>
-              <span v-if="l.imageIds.length > 1" class="img-count tabular" :title="`${l.imageIds.length} 张图片`">
+              <span v-if="l.imageIds.length > 1" class="img-count tabular" :title="`${l.imageIds.length} 个图片 / 视频`">
                 <Icon name="image" :size="11" />{{ l.imageIds.length }}
               </span>
             </span>
@@ -325,7 +330,7 @@ function openImages(l: Lineup) {
           type="button"
           class="preview-cover"
           :disabled="!preview.imageIds.length"
-          title="查看大图"
+          title="查看图片 / 视频"
           @click="openImages(preview)"
         >
           <LineupThumb :image-id="preview.imageIds[0]" :color="store.typeColor(preview.typeId)" :alt="preview.name" />

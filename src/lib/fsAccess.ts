@@ -53,6 +53,22 @@ export async function writeFile(dir: FileSystemDirectoryHandle, name: string, da
   }
 }
 
+/** 子文件夹；create 为 false 且不存在时返回 null */
+export async function getSubdirectory(
+  dir: FileSystemDirectoryHandle,
+  name: string,
+  create = false,
+): Promise<FileSystemDirectoryHandle | null> {
+  try {
+    return await dir.getDirectoryHandle(name, { create })
+  } catch (e) {
+    if (!create && e instanceof DOMException && (e.name === 'NotFoundError' || e.name === 'TypeMismatchError')) {
+      return null
+    }
+    throw e
+  }
+}
+
 export async function readFile(dir: FileSystemDirectoryHandle, name: string): Promise<File> {
   const fileHandle = await dir.getFileHandle(name)
   return fileHandle.getFile()

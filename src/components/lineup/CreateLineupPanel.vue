@@ -139,7 +139,7 @@ async function save() {
   }
   if (!typeId.value || saving.value) return
   if (processing.value) {
-    ui.toast('图片还在处理中，请稍等', { kind: 'info' })
+    ui.toast('图片 / 视频还在处理中，请稍等', { kind: 'info' })
     return
   }
   saving.value = true
@@ -172,7 +172,7 @@ async function cancel() {
   if (dirty.value) {
     const ok = await ui.confirm({
       title: '放弃这个 Lineup？',
-      message: '已填写的内容和图片不会被保存。',
+      message: '已填写的内容和图片 / 视频不会被保存。',
       confirmText: '放弃',
       danger: true,
     })
@@ -321,7 +321,7 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
         </div>
 
         <div class="field">
-          <span class="field-label">图片<span class="field-hint">第一张为预览图</span></span>
+          <span class="field-label">图片 / 视频<span class="field-hint">第一个为预览图</span></span>
           <ImageManager v-model="images" compact :listen-paste="!hidden" :title="name || '新建 Lineup'" />
         </div>
 
@@ -342,7 +342,7 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
         <button type="button" class="btn btn-ghost" @click="cancel">取消</button>
         <button type="button" class="btn btn-primary" :disabled="saving || processing" @click="save">
           <Icon name="check" :size="16" />
-          {{ saving ? '保存中…' : processing ? '处理图片中…' : '保存' }}
+          {{ saving ? '保存中…' : processing ? '处理中…' : '保存' }}
         </button>
       </footer>
     </section>

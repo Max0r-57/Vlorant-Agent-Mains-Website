@@ -69,10 +69,11 @@ const maxSides = [
   </section>
 
   <section class="s-section">
-    <h3 class="s-title">图片上传</h3>
+    <h3 class="s-title">图片 / 视频上传</h3>
     <p class="s-desc">
       游戏截图通常有几 MB，压缩后一般只有几百 KB，肉眼几乎看不出差别，可以大幅节省浏览器存储空间。
       无论是否压缩，都会额外生成一张小缩略图用于列表和预览。设置只影响之后上传的图片。
+      视频不会被压缩，原样保存（单个最大 200 MB），建议上传前先剪掉不需要的部分。
     </p>
     <div class="s-row">
       <div class="s-row-text">

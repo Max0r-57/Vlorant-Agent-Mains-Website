@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import type { ImageSource } from '@/types'
+import type { Annotation, ImageSource } from '@/types'
 
 export interface Toast {
   id: number
@@ -26,7 +26,15 @@ interface ConfirmState extends ConfirmOptions {
   resolve: (result: ConfirmResult) => void
 }
 
-export interface LightboxState {
+export interface LightboxOptions {
+  /**
+   * 给还没保存的图片（url 来源）保存标注：由打开查看器的地方负责更新草稿，返回更新后的来源。
+   * 已保存的图片（stored 来源）直接写入数据库，不需要这个回调。
+   */
+  annotateDraft?: (index: number, annotations: Annotation[]) => Promise<ImageSource | null>
+}
+
+export interface LightboxState extends LightboxOptions {
   sources: ImageSource[]
   index: number
   title?: string
@@ -48,9 +56,9 @@ export const useUi = defineStore('ui', () => {
     settingsOpen.value = true
   }
 
-  function openLightbox(sources: ImageSource[], index = 0, title?: string) {
+  function openLightbox(sources: ImageSource[], index = 0, title?: string, opts: LightboxOptions = {}) {
     if (!sources.length) return
-    lightbox.value = { sources, index: Math.min(Math.max(0, index), sources.length - 1), title }
+    lightbox.value = { ...opts, sources, index: Math.min(Math.max(0, index), sources.length - 1), title }
   }
 
   function closeLightbox() {

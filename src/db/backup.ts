@@ -1,31 +1,44 @@
-import { strFromU8, strToU8, unzip, zip, type Unzipped, type Zippable } from 'fflate'
+import { strFromU8, strToU8 } from 'fflate'
 import { toRaw } from 'vue'
 import { POS_MAX, type Lineup, type LineupType, type StoredImage } from '@/types'
+import { plainAnnotations, sanitizeAnnotations } from '@/lib/annotations'
 import { extForMime } from '@/lib/image'
 import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
+import { createZip, openZip, type ZipArchive, type ZipInput } from '@/lib/zip'
 import { getDB } from './database'
 
 /**
  * 备份文件格式（.zip）：
- *   backup.json          类型、Lineup 和图片的元数据
+ *   backup.json          类型、Lineup 和图片 / 视频的元数据
  *   images/<id>.<ext>    原图
- *   thumbs/<id>.<ext>    缩略图
+ *   videos/<id>.<ext>    视频
+ *   thumbs/<id>.<ext>    缩略图（视频为封面）
  *
  * 版本 2：Lineup 增加了落点参照（landing）和路径（paths）。
- * 版本 1 的备份仍然可以导入（没有落点和路径）；旧版网站会拒绝导入版本 2 的备份，避免丢失路径数据。
+ * 版本 3：增加了视频和图片标注（annotations）。
+ * 自动备份的压缩包不含视频本身（标记为 external）：视频单独存放在备份文件夹的 videos 子文件夹里，
+ * 只写一次，不会每次修改都重写，恢复时再从那里读取。
+ * 旧版本的备份仍然可以导入；旧版网站会拒绝导入新版本的备份，避免丢失数据。
  */
 export const BACKUP_FORMAT = 'valorant-lineup-notebook'
-export const BACKUP_VERSION = 2
+export const BACKUP_VERSION = 3
 
 interface ImageEntry {
   id: string
+  /** 不填表示图片 */
+  kind?: 'video'
   width: number
   height: number
   createdAt: number
+  /** 压缩包内（external 时为备份文件夹内）的路径 */
   file: string
   mime: string
   thumbFile: string
   thumbMime: string
+  duration?: number
+  annotations?: unknown[]
+  /** 文件不在压缩包里，而在备份文件夹中（自动备份的视频） */
+  external?: true
 }
 
 interface BackupJson {
@@ -42,24 +55,16 @@ export interface ParsedBackup {
   types: LineupType[]
   lineups: Lineup[]
   images: StoredImage[]
-  /** 数据里引用了、但压缩包中缺失的图片数量 */
+  /** 数据里引用了、但压缩包中缺失的图片 / 视频数量 */
   missingImages: number
+  /** 其中保存在自动备份文件夹 videos 子文件夹里、这次没能读到的视频数量 */
+  missingExternal: number
 }
 
-function zipAsync(files: Zippable) {
-  return new Promise<Uint8Array>((resolve, reject) =>
-    zip(files, { level: 6 }, (err, data) => (err ? reject(err) : resolve(data))),
-  )
-}
-
-function unzipAsync(data: Uint8Array, only?: string) {
-  return new Promise<Unzipped>((resolve, reject) =>
-    unzip(data, only ? { filter: (f) => f.name === only } : {}, (err, files) => (err ? reject(err) : resolve(files))),
-  )
-}
-
-async function toBytes(blob: Blob) {
-  return new Uint8Array(await blob.arrayBuffer())
+/** 自动备份时单独保存的视频：path 是相对备份文件夹的路径（videos/<id>.<ext>） */
+export interface ExternalFile {
+  path: string
+  blob: Blob
 }
 
 function pad(n: number) {
@@ -72,7 +77,11 @@ export function backupFileName(now = new Date()) {
   return `lineup-backup-${d}-${t}.zip`
 }
 
-export async function exportBackup() {
+/**
+ * 导出全部数据。
+ * externalVideos：视频不放进压缩包，而是通过返回值 external 交给调用方单独保存（自动备份使用）。
+ */
+export async function exportBackup(opts: { externalVideos?: boolean } = {}) {
   const db = await getDB()
   const tx = db.transaction(['types', 'lineups', 'images'], 'readonly')
   const [types, lineups, images] = await Promise.all([
@@ -82,15 +91,17 @@ export async function exportBackup() {
   ])
   await tx.done
 
-  const files: Zippable = {}
+  // 图片、视频本身已经是压缩格式，原样放进压缩包（不复制数据，大视频也不会占用额外内存）
+  const files: ZipInput[] = []
+  const external: ExternalFile[] = []
   const entries: ImageEntry[] = []
+  let videos = 0
   for (const img of images) {
-    const file = `images/${img.id}.${extForMime(img.blob.type)}`
+    const video = img.kind === 'video'
+    if (video) videos++
+    const file = `${video ? 'videos' : 'images'}/${img.id}.${extForMime(img.blob.type)}`
     const thumbFile = `thumbs/${img.id}.${extForMime(img.thumb.type)}`
-    // 图片本身已经是压缩格式，不再重复压缩
-    files[file] = [await toBytes(img.blob), { level: 0 }]
-    files[thumbFile] = [await toBytes(img.thumb), { level: 0 }]
-    entries.push({
+    const entry: ImageEntry = {
       id: img.id,
       width: img.width,
       height: img.height,
@@ -99,7 +110,20 @@ export async function exportBackup() {
       mime: img.blob.type,
       thumbFile,
       thumbMime: img.thumb.type,
-    })
+    }
+    if (video) {
+      entry.kind = 'video'
+      entry.duration = img.duration ?? 0
+    }
+    if (img.annotations?.length) entry.annotations = plainAnnotations(img.annotations)
+    if (video && opts.externalVideos) {
+      entry.external = true
+      external.push({ path: file, blob: img.blob })
+    } else {
+      files.push({ name: file, data: img.blob })
+    }
+    files.push({ name: thumbFile, data: img.thumb })
+    entries.push(entry)
   }
   const json: BackupJson = {
     format: BACKUP_FORMAT,
@@ -109,11 +133,11 @@ export async function exportBackup() {
     lineups,
     images: entries,
   }
-  files['backup.json'] = strToU8(JSON.stringify(json, null, 2))
-  const data = await zipAsync(files)
+  files.unshift({ name: 'backup.json', data: strToU8(JSON.stringify(json, null, 2)), compress: true })
   return {
-    blob: new Blob([data as Uint8Array<ArrayBuffer>], { type: 'application/zip' }),
-    counts: { types: types.length, lineups: lineups.length, images: images.length },
+    blob: await createZip(files),
+    counts: { types: types.length, lineups: lineups.length, images: images.length - videos, videos },
+    external,
   }
 }
 
@@ -133,36 +157,55 @@ function clampPos(v: unknown) {
   return Math.min(POS_MAX, Math.max(0, Math.round(num(v, POS_MAX / 2))))
 }
 
-/** 只读取备份的概要（不解压图片），用于列表和提示 */
+async function readJson(zip: ZipArchive): Promise<unknown> {
+  const raw = await zip.bytes('backup.json').catch(() => null)
+  if (!raw) throw new Error('压缩包中没有 backup.json，不是有效的备份文件')
+  try {
+    return JSON.parse(strFromU8(raw))
+  } catch {
+    throw new Error('backup.json 已损坏，无法解析')
+  }
+}
+
+/** 只读取备份的概要（不读取图片、视频），用于列表和提示 */
 export async function readBackupSummary(file: Blob) {
-  const files = await unzipAsync(await toBytes(file), 'backup.json').catch(() => ({}) as Unzipped)
-  const raw = files['backup.json']
-  if (!raw) throw new Error('不是有效的备份文件')
-  const json = JSON.parse(strFromU8(raw)) as Partial<BackupJson>
-  if (json.format !== BACKUP_FORMAT) throw new Error('不是本网站的备份文件')
+  const zip = await openZip(file).catch(() => null)
+  if (!zip) throw new Error('不是有效的备份文件')
+  const json = (await readJson(zip)) as Partial<BackupJson>
+  if (!isObj(json) || json.format !== BACKUP_FORMAT) throw new Error('不是本网站的备份文件')
+  const media = Array.isArray(json.images) ? json.images.filter(isObj) : []
+  const videos = media.filter((e) => e.kind === 'video').length
   return {
     exportedAt: num(json.exportedAt),
     lineups: Array.isArray(json.lineups) ? json.lineups.length : 0,
     types: Array.isArray(json.types) ? json.types.length : 0,
-    images: Array.isArray(json.images) ? json.images.length : 0,
+    images: media.length - videos,
+    videos,
   }
 }
 
-export async function parseBackup(file: Blob): Promise<ParsedBackup> {
-  let files: Unzipped
+/** 备份引用的、存放在压缩包外（自动备份文件夹 videos 子文件夹）的文件路径 */
+export async function readExternalPaths(file: Blob): Promise<string[]> {
+  const json = await readJson(await openZip(file))
+  if (!isObj(json) || !Array.isArray(json.images)) return []
+  return json.images.filter(isObj).filter((e) => e.external === true).map((e) => str(e.file))
+}
+
+/**
+ * 读取备份文件。
+ * readExternal：读取存放在压缩包外的视频（从自动备份文件夹恢复时提供），读不到时返回 null。
+ */
+export async function parseBackup(
+  file: Blob,
+  opts: { readExternal?: (path: string) => Promise<Blob | null> } = {},
+): Promise<ParsedBackup> {
+  let zip: ZipArchive
   try {
-    files = await unzipAsync(await toBytes(file))
+    zip = await openZip(file)
   } catch {
     throw new Error('无法解压，请确认选择的是本网站导出的 .zip 备份文件')
   }
-  const raw = files['backup.json']
-  if (!raw) throw new Error('压缩包中没有 backup.json，不是有效的备份文件')
-  let json: unknown
-  try {
-    json = JSON.parse(strFromU8(raw))
-  } catch {
-    throw new Error('backup.json 已损坏，无法解析')
-  }
+  const json = await readJson(zip)
   if (!isObj(json) || json.format !== BACKUP_FORMAT) throw new Error('不是本网站的备份文件')
   if (num(json.version) > BACKUP_VERSION) {
     throw new Error('备份文件来自更新版本的网站，请先更新网站后再导入')
@@ -181,23 +224,45 @@ export async function parseBackup(file: Blob): Promise<ParsedBackup> {
     }))
 
   const images: StoredImage[] = []
+  let missingExternal = 0
   for (const e of (Array.isArray(json.images) ? json.images : []).filter(isObj)) {
     const id = str(e.id)
-    const data = files[str(e.file)]
-    if (!id || !data) continue
-    const thumbData = files[str(e.thumbFile)] ?? data
-    const blob = new Blob([data as Uint8Array<ArrayBuffer>], { type: str(e.mime, 'image/webp') })
-    const thumb = new Blob([thumbData as Uint8Array<ArrayBuffer>], {
-      type: str(e.thumbMime, str(e.mime, 'image/webp')),
-    })
-    images.push({
+    if (!id) continue
+    const video = e.kind === 'video'
+    const mime = str(e.mime, video ? 'video/mp4' : 'image/webp')
+    let blob: Blob | null = null
+    if (e.external === true) {
+      // 只接受 videos/<文件名> 这样的路径，不允许跳到备份文件夹以外
+      const path = str(e.file)
+      if (/^videos\/[\w.-]+$/.test(path) && !path.includes('..') && opts.readExternal) {
+        blob = await opts.readExternal(path).catch(() => null)
+      }
+      if (blob) blob = blob.slice(0, blob.size, mime)
+      else missingExternal++
+    } else {
+      blob = await zip.blob(str(e.file), mime).catch(() => null)
+    }
+    if (!blob) continue
+    // 缺少缩略图时：图片用原图代替；视频没有封面就跳过
+    const thumb =
+      (await zip.blob(str(e.thumbFile), str(e.thumbMime, 'image/webp')).catch(() => null)) ?? (video ? null : blob)
+    if (!thumb) continue
+    const img: StoredImage = {
       id,
       blob,
       thumb,
       width: num(e.width),
       height: num(e.height),
       createdAt: num(e.createdAt, now),
-    })
+    }
+    if (video) {
+      img.kind = 'video'
+      img.duration = Math.max(0, num(e.duration))
+    } else {
+      const annotations = sanitizeAnnotations(e.annotations)
+      if (annotations.length) img.annotations = annotations
+    }
+    images.push(img)
   }
   const imageIds = new Set(images.map((i) => i.id))
 
@@ -229,7 +294,7 @@ export async function parseBackup(file: Blob): Promise<ParsedBackup> {
       }
     })
 
-  return { exportedAt: num(json.exportedAt, now), types, lineups, images, missingImages }
+  return { exportedAt: num(json.exportedAt, now), types, lineups, images, missingImages, missingExternal }
 }
 
 /**
@@ -242,7 +307,11 @@ export async function applyBackup(input: ParsedBackup, mode: 'merge' | 'replace'
   // 界面上可能把解析结果放进了响应式状态，写入 IndexedDB 前取回原始对象
   const backup = toRaw(input)
   const types = toRaw(backup.types).map((t) => ({ ...toRaw(t) }))
-  const images = toRaw(backup.images).map((i) => ({ ...toRaw(i) }))
+  const images = toRaw(backup.images).map((item) => {
+    const i = { ...toRaw(item) }
+    if (i.annotations) i.annotations = plainAnnotations(i.annotations)
+    return i
+  })
   let lineups = toRaw(backup.lineups).map((l) => {
     const raw = toRaw(l)
     return { ...raw, imageIds: [...toRaw(raw.imageIds)], landing: plainLanding(raw.landing), paths: plainPaths(raw.paths) }

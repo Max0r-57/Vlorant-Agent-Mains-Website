@@ -59,14 +59,29 @@ export interface LineupType {
   createdAt: number
 }
 
-/** IndexedDB 里保存的图片：压缩后的原图 + 缩略图 */
+/** 媒体类型；旧数据没有这个字段，都是图片 */
+export type MediaKind = 'image' | 'video'
+
+/**
+ * IndexedDB 里保存的图片 / 视频（都放在 images 表里，Lineup.imageIds 引用）：
+ * 图片是压缩后的原图 + 缩略图；视频是原文件 + 截取的一帧画面（缩略图）。
+ */
 export interface StoredImage {
   id: string
+  /** 原图 / 视频文件 */
   blob: Blob
+  /** 缩略图（视频为封面）；图片有标注时，标注会画进缩略图里 */
   thumb: Blob
+  /** 原图 / 视频画面的像素尺寸 */
   width: number
   height: number
   createdAt: number
+  /** 不填表示图片 */
+  kind?: MediaKind
+  /** 视频时长（秒） */
+  duration?: number
+  /** 图片上的标注（原图像素坐标），原图本身不会被修改 */
+  annotations?: Annotation[]
 }
 
 /** 新建 / 编辑时，尚未写入数据库的图片 */
@@ -76,5 +91,61 @@ export type NewImage = StoredImage
 export type LineupDraft = Omit<Lineup, 'id' | 'createdAt' | 'updatedAt' | 'imageIds' | 'landing' | 'paths'> &
   Partial<Pick<Lineup, 'landing' | 'paths'>>
 
-/** 图片来源：已保存的图片用 id，未保存的用临时 URL */
-export type ImageSource = { kind: 'stored'; id: string } | { kind: 'url'; url: string }
+/**
+ * 查看器里的媒体来源：已保存的用 id（类型、尺寸、标注从数据库读取）；
+ * 未保存的草稿用临时 URL，并附带这些信息。
+ */
+export type ImageSource =
+  | { kind: 'stored'; id: string }
+  | {
+      kind: 'url'
+      url: string
+      /** 缩略图 / 视频封面 */
+      thumb?: string
+      media?: MediaKind
+      width?: number
+      height?: number
+      annotations?: readonly Annotation[]
+    }
+
+/** 图片标注（坐标为原图像素），见 src/lib/annotations.ts */
+export interface AnnotationBase {
+  id: string
+  color: string
+  /** 线宽（原图像素）；文字为字号 */
+  size: number
+}
+
+/** 手动圈画：points 为 [x0, y0, x1, y1, …] */
+export interface PenAnnotation extends AnnotationBase {
+  type: 'pen'
+  points: number[]
+}
+
+/** 圆圈（椭圆）：外接矩形 */
+export interface EllipseAnnotation extends AnnotationBase {
+  type: 'ellipse'
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 箭头：从 (x1, y1) 指向 (x2, y2) */
+export interface ArrowAnnotation extends AnnotationBase {
+  type: 'arrow'
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+/** 文本框：(x, y) 为左上角，可以多行 */
+export interface TextAnnotation extends AnnotationBase {
+  type: 'text'
+  x: number
+  y: number
+  text: string
+}
+
+export type Annotation = PenAnnotation | EllipseAnnotation | ArrowAnnotation | TextAnnotation
