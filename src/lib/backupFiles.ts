@@ -61,13 +61,15 @@ export function autoBackupsToPrune(names: readonly string[], keepDays: number, t
 /** 写进备份文件夹的说明文件 */
 export function backupReadme(siteUrl: string, guideUrl: string) {
   return [
-    '这个文件夹是「Lineup 笔记」网站的自动备份文件夹。',
+    '这个文件夹是「无畏契约专精记忆」网站的自动备份文件夹。',
     '',
     '【文件说明】',
     '· lineup-auto-2026-09-28.zip 这类文件是自动备份：每天一个文件，当天的每次修改都会更新当天的文件；',
     '  旧的自动备份只保留最近若干天（天数可以在网站「设置 → 数据备份」里修改）。',
     '· lineup-backup-20260928-1430.zip 这类文件是手动导出的备份，网站不会自动删除它们。',
     '· 每个 zip 都包含当时的全部 Lineup、类型和图片，任意一个都可以单独用来恢复。',
+    '· videos 文件夹里是 Lineup 中的视频：视频太大，不放进每天的 zip，每个只保存一次，',
+    '  恢复时网站会从这里读取。请不要单独移动或删除这个文件夹。',
     '· 请不要重命名自动备份文件，否则网站无法识别和清理它们。',
     '',
     '【如何恢复】',

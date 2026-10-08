@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useBackupActions } from '@/composables/useBackupActions'
 import type { ParsedBackup } from '@/db/backup'
 import { BACKUP_GUIDE_URL } from '@/data/links'
-import { formatBytes, formatDateTime } from '@/lib/format'
+import { formatBytes, formatDateTime, formatMediaCount } from '@/lib/format'
 import { describeFsError } from '@/lib/fsAccess'
 import { KEEP_DAY_OPTIONS, useAutoBackup, type FolderBackup } from '@/stores/autoBackup'
 import { useLineups } from '@/stores/lineups'
@@ -69,7 +69,7 @@ async function connect() {
       let detail = ''
       try {
         const s = await ab.readSummary(latest.name)
-        detail = `（${s.lineups} 个 Lineup、${s.images} 张图片）`
+        detail = `（${s.lineups} 个 Lineup、${formatMediaCount(s.images, s.videos)}）`
       } catch {
         /* 读不出概要也不影响 */
       }
@@ -153,8 +153,8 @@ function fileTime(f: FolderBackup) {
       <span class="badge" :class="status.cls">{{ status.text }}</span>
     </div>
     <p class="s-desc">
-      选择电脑上的一个文件夹后，每次新增、修改、删除 Lineup，网站都会在几秒后自动把全部数据（包括图片）保存进去：
-      每天一个 <code>lineup-auto-日期.zip</code>，只保留最近几天。浏览器数据被清掉时，可以从这个文件夹恢复。
+      选择电脑上的一个文件夹后，每次新增、修改、删除 Lineup，网站都会在几秒后自动把全部数据（包括图片和视频）保存进去：
+      每天一个 <code>lineup-auto-日期.zip</code>，只保留最近几天；视频单独放在文件夹里的 <code>videos</code> 子文件夹。浏览器数据被清掉时，可以从这个文件夹恢复。
       <a :href="BACKUP_GUIDE_URL" target="_blank" rel="noopener">查看备份与恢复说明</a>
     </p>
 

@@ -1,4 +1,5 @@
 import { toRaw } from 'vue'
+import { plainAnnotations } from '@/lib/annotations'
 import { plainLanding, plainPaths } from '@/lib/paths'
 import type { Lineup, LineupType, StoredImage } from '@/types'
 import { getDB } from './database'
@@ -23,7 +24,7 @@ function plainType(t: LineupType): LineupType {
 
 function plainImage(img: StoredImage): StoredImage {
   const raw = toRaw(img)
-  return {
+  const plain: StoredImage = {
     id: raw.id,
     blob: toRaw(raw.blob),
     thumb: toRaw(raw.thumb),
@@ -31,6 +32,12 @@ function plainImage(img: StoredImage): StoredImage {
     height: raw.height,
     createdAt: raw.createdAt,
   }
+  if (raw.kind === 'video') {
+    plain.kind = 'video'
+    plain.duration = raw.duration ?? 0
+  }
+  if (raw.annotations?.length) plain.annotations = plainAnnotations(raw.annotations)
+  return plain
 }
 
 export async function loadAll() {
@@ -111,6 +118,12 @@ export async function getImage(id: string) {
   return db.get('images', id)
 }
 
+/** 修改已保存的图片（例如保存标注后更新标注和缩略图） */
+export async function putImage(img: StoredImage) {
+  const db = await getDB()
+  await db.put('images', plainImage(img))
+}
+
 export async function getAllImageIds() {
   const db = await getDB()
   return db.getAllKeys('images')
@@ -151,16 +164,18 @@ export async function clearAll() {
   await tx.done
 }
 
-/** 统计图片占用（用于设置页展示） */
+/** 统计图片 / 视频占用（用于设置页展示）；count 包含视频，videos 是其中视频的数量 */
 export async function imageStats() {
   const db = await getDB()
   let count = 0
+  let videos = 0
   let bytes = 0
   let cursor = await db.transaction('images').store.openCursor()
   while (cursor) {
     count++
+    if (cursor.value.kind === 'video') videos++
     bytes += (cursor.value.blob?.size ?? 0) + (cursor.value.thumb?.size ?? 0)
     cursor = await cursor.continue()
   }
-  return { count, bytes }
+  return { count, videos, bytes }
 }

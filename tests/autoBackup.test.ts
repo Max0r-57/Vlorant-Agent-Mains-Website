@@ -37,6 +37,7 @@ class FakeWritable {
 class FakeDir {
   readonly kind = 'directory'
   files = new Map<string, FakeEntry>()
+  dirs = new Map<string, FakeDir>()
   perm: PermissionState = 'granted'
   failWith: string | null = null
   constructor(public name = 'Lineup备份') {}
@@ -66,11 +67,22 @@ class FakeDir {
     if (!this.files.has(name) && !opts?.create) throw new DOMException('不存在', 'NotFoundError')
     return this.fileHandle(name)
   }
+  async getDirectoryHandle(name: string, opts?: { create?: boolean }) {
+    if (this.failWith) throw new DOMException('模拟失败', this.failWith)
+    let sub = this.dirs.get(name)
+    if (!sub) {
+      if (!opts?.create) throw new DOMException('不存在', 'NotFoundError')
+      sub = new FakeDir(name)
+      this.dirs.set(name, sub)
+    }
+    return sub
+  }
   async removeEntry(name: string) {
     this.files.delete(name)
   }
   async *values() {
     for (const name of [...this.files.keys()]) yield this.fileHandle(name)
+    for (const sub of this.dirs.values()) yield sub
   }
   put(name: string) {
     this.files.set(name, { blob: new Blob(['x']), lastModified: 1 })
@@ -84,6 +96,19 @@ function asHandle(dir: FakeDir) {
 function fakeImage(id: string): StoredImage {
   const blob = new Blob([new Uint8Array(64).fill(9)], { type: 'image/webp' })
   return { id, blob, thumb: blob, width: 640, height: 360, createdAt: Date.now() }
+}
+
+function fakeVideo(id: string, bytes = 4000): StoredImage {
+  return {
+    id,
+    kind: 'video',
+    duration: 8,
+    blob: new Blob([new Uint8Array(bytes).fill(6)], { type: 'video/mp4' }),
+    thumb: new Blob([new Uint8Array(16).fill(2)], { type: 'image/webp' }),
+    width: 1280,
+    height: 720,
+    createdAt: Date.now(),
+  }
 }
 
 async function addLineup(name = 'A 点燃烧弹', images: StoredImage[] = []) {
@@ -259,5 +284,73 @@ describe('auto backup store', () => {
     expect(ab.enabled).toBe(false)
     // 备份文件夹里的文件原样保留
     expect(dir.files.size).toBe(1)
+  })
+
+  it('keeps videos out of the daily zip and restores them from the videos folder', async () => {
+    const ab = useAutoBackup()
+    const dir = new FakeDir()
+    ab.attach(asHandle(dir))
+    await addLineup('带视频', [fakeVideo('vid_a'), fakeImage('img_a')])
+    expect((await ab.backupNow()).ok).toBe(true)
+
+    const name = autoBackupFileName(new Date())
+    const videos = dir.dirs.get('videos')!
+    expect([...videos.files.keys()]).toEqual(['vid_a.mp4'])
+    const zip = dir.files.get(name)!.blob
+    expect(zip.size).toBeLessThan(4000)
+
+    // 再次备份不会重写已经存在的视频
+    const written = videos.files.get('vid_a.mp4')!
+    await useLineups().updateLineup(useLineups().lineups[0]!.id, { note: '改备注' })
+    await ab.backupNow()
+    expect(videos.files.get('vid_a.mp4')).toBe(written)
+
+    // 从文件夹恢复：视频从 videos 子文件夹读回
+    const restored = await ab.readBackup(name)
+    expect(restored.missingExternal).toBe(0)
+    const video = restored.images.find((i) => i.id === 'vid_a')!
+    expect(video.kind).toBe('video')
+    expect(video.blob.size).toBe(4000)
+    // 单独导入压缩包时读不到视频
+    expect((await parseBackup(zip)).missingExternal).toBe(1)
+  })
+
+  it('removes videos only when no kept backup refers to them', async () => {
+    const ab = useAutoBackup()
+    const dir = new FakeDir()
+    ab.attach(asHandle(dir))
+    const l = await addLineup('视频', [fakeVideo('vid_old')])
+    await ab.backupNow()
+    const today = autoBackupFileName(new Date())
+    // 前几天的备份也引用了这个视频
+    dir.files.set('lineup-auto-2020-01-01.zip', { ...dir.files.get(today)! })
+
+    await useLineups().deleteLineup(l.id)
+    await addLineup('没有视频')
+    await ab.backupNow()
+    // 旧备份还在：视频保留
+    expect(dir.dirs.get('videos')!.files.has('vid_old.mp4')).toBe(true)
+
+    // 只保留 1 天：旧备份被删掉后，视频也不再需要
+    await ab.setKeepDays(1)
+    expect(dir.files.has('lineup-auto-2020-01-01.zip')).toBe(false)
+    expect(dir.dirs.get('videos')!.files.size).toBe(0)
+  })
+
+  it('keeps all videos when a backup cannot be read', async () => {
+    const ab = useAutoBackup()
+    const dir = new FakeDir()
+    ab.attach(asHandle(dir))
+    const l = await addLineup('视频', [fakeVideo('vid_keep')])
+    await ab.backupNow()
+    await useLineups().deleteLineup(l.id)
+    await addLineup('没有视频')
+    dir.put('lineup-auto-2020-01-01.zip')
+    dir.put('lineup-auto-2020-01-02.zip')
+    await ab.setKeepDays(2)
+    await ab.backupNow()
+    // 01-01 被清理，但 01-02 读不出来：不确定它是否引用视频，所以不删除视频
+    expect(dir.files.has('lineup-auto-2020-01-01.zip')).toBe(false)
+    expect(dir.dirs.get('videos')!.files.has('vid_keep.mp4')).toBe(true)
   })
 })

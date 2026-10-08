@@ -21,7 +21,7 @@ import {
   type EditableImage,
 } from '@/components/lineup/editableImages'
 
-/** Lineup 详情页：查看并编辑名字、类型、英雄、图片、备注、地图、位置、落点参照和路径 */
+/** Lineup 详情页：查看并编辑名字、类型、英雄、图片 / 视频、备注、地图、位置、落点参照和路径 */
 const route = useRoute()
 const router = useRouter()
 const store = useLineups()
@@ -109,7 +109,7 @@ async function save() {
   tried.value = true
   if (!form.name.trim() || !form.typeId) return
   if (processing.value) {
-    ui.toast('图片还在处理中，请稍等', { kind: 'info' })
+    ui.toast('图片 / 视频还在处理中，请稍等', { kind: 'info' })
     return
   }
   if (positionEditor.value?.isEditingPaths()) {
@@ -152,7 +152,7 @@ async function remove() {
   if (!l) return
   const ok = await ui.confirm({
     title: `删除「${l.name}」？`,
-    message: '这个 Lineup 和它的所有图片都会被永久删除，无法恢复。',
+    message: '这个 Lineup 和它的所有图片、视频都会被永久删除，无法恢复。',
     confirmText: '删除',
     danger: true,
   })
@@ -187,7 +187,7 @@ async function confirmLeave() {
   if (skipGuard || !hasUnsaved()) return true
   return ui.confirm({
     title: '有未保存的修改',
-    message: '离开后，本次修改（包括新上传的图片）将会丢失。',
+    message: '离开后，本次修改（包括新上传的图片和视频）将会丢失。',
     confirmText: '放弃修改并离开',
     cancelText: '继续编辑',
     danger: true,
@@ -308,7 +308,7 @@ watch(
 
       <section class="card">
         <header class="card-head">
-          <h2>图片</h2>
+          <h2>图片 / 视频</h2>
           <span class="count tabular">{{ images.length }}</span>
           <span class="card-hint">第一张为预览图 · 拖动排序 · 点击查看大图 · 支持 Ctrl+V 粘贴截图</span>
         </header>

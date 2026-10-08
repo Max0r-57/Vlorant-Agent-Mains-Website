@@ -7,8 +7,15 @@ import { distanceMeters, type MapMetric } from './geometry'
  * 时间单位都是秒，距离单位是游戏内的米。
  */
 
-/** 爆能器倒计时（秒） */
+/** 爆能器倒计时（秒）：安放后 45 秒爆炸，也是演练开始时剩余时间的默认值和上限 */
 export const SPIKE_SECONDS = 45
+
+/** 演练开始时爆能器的剩余时间：限制在 0–45 秒，保留一位小数；不是数字时用 45 秒 */
+export function clampSpikeSeconds(v: unknown) {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
+  if (!Number.isFinite(n)) return SPIKE_SECONDS
+  return Math.round(Math.min(SPIKE_SECONDS, Math.max(0, n)) * 10) / 10
+}
 
 export interface RouteLeg {
   pathId: string
@@ -94,15 +101,21 @@ export function positionOnRoute(route: Route, t: number): { pos: Position; legIn
   return { pos: pointAtDistance(leg, (time - leg.start) * leg.speed), legIndex: index }
 }
 
-export type LandingPhase = 'flight' | 'active' | 'done'
+export type LandingPhase = 'flight' | 'active' | 'ult' | 'done'
 
 /**
- * 落点倒计时：先倒数落点时间（delay，图案隐藏），落地后再倒数持续时间（duration）。
- * remaining 为当前阶段剩余的秒数。
+ * 落点倒计时：先倒数落点时间（delay，图案隐藏），落地后再倒数持续时间（duration），
+ * ult 大于 0 时（打开了大招）接着倒数大招的持续时间。remaining 为当前阶段剩余的秒数。
  */
-export function landingPhase(t: number, delay: number, duration: number): { phase: LandingPhase; remaining: number } {
+export function landingPhase(
+  t: number,
+  delay: number,
+  duration: number,
+  ult = 0,
+): { phase: LandingPhase; remaining: number } {
   if (t < delay) return { phase: 'flight', remaining: delay - t }
   if (t < delay + duration) return { phase: 'active', remaining: delay + duration - t }
+  if (ult > 0 && t < delay + duration + ult) return { phase: 'ult', remaining: delay + duration + ult - t }
   return { phase: 'done', remaining: 0 }
 }
 

@@ -3,6 +3,7 @@
  * 落点图案（放在 MapCanvas 的默认插槽里，用 at(pos) 定位）：
  * - 有技能范围时（炼狱燃烧弹）：按实际直径显示的半透明红色圆形，透过它能看到地图；
  * - 其他英雄：通用的落点标记。
+ * - beam：现场演练中大招（天基光束）生效时，用大招颜色显示并带脉冲光圈。
  * 可拖动时由父组件处理 pointerdown。
  */
 withDefaults(
@@ -14,16 +15,18 @@ withDefaults(
     dragging?: boolean
     /** 淡化显示（例如燃烧已经结束、或者只是预览） */
     dim?: boolean
+    /** 大招生效中 */
+    beam?: boolean
     label?: string
   }>(),
-  { diameter: null, color: '#ff4d2e', draggable: false, dragging: false, dim: false, label: '落点' },
+  { diameter: null, color: '#ff4d2e', draggable: false, dragging: false, dim: false, beam: false, label: '落点' },
 )
 </script>
 
 <template>
   <div
     class="landing"
-    :class="{ area: !!diameter, draggable, dragging, dim }"
+    :class="{ area: !!diameter, draggable, dragging, dim, beam }"
     :style="{ '--c': color, '--d': diameter ? `${diameter}px` : undefined }"
     :data-marker="draggable ? '' : undefined"
     :role="draggable ? 'button' : undefined"
@@ -96,6 +99,42 @@ withDefaults(
 .draggable:hover .fill,
 .dragging .fill {
   border-color: #fff;
+}
+/* 大招生效：更亮的填充 + 向外扩散的光圈 */
+.beam .fill {
+  border-width: 2px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--c) 70%, #fff) 0%,
+    color-mix(in srgb, var(--c) 45%, transparent) 45%,
+    color-mix(in srgb, var(--c) 30%, transparent) 100%
+  );
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--c) 70%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--c) 50%, transparent);
+}
+.beam .fill::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--c);
+  border-radius: 50%;
+  animation: beam-pulse 1.1s ease-out infinite;
+}
+@keyframes beam-pulse {
+  from {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beam .fill::after {
+    animation: none;
+  }
 }
 .center {
   position: absolute;

@@ -4,18 +4,23 @@ import { formatClock, type LandingPhase } from '@/lib/rehearsal'
 
 /**
  * 落点位置上的倒计时（用 at(pos) 定位，显示在落点上方）：
- * 先倒数落点时间（图案还没出现），落地后倒数技能持续时间。
+ * 先倒数落点时间（图案还没出现），落地后倒数技能持续时间，打开大招时接着倒数大招持续时间。
  */
 const props = defineProps<{
   phase: LandingPhase
   remaining: number
   /** 技能名称，如「燃烧弹」 */
   label: string
+  /** 大招名称，如「天基光束」 */
+  ultLabel?: string
   /** 与落点中心的距离（像素），通常为范围半径 */
   offset: number
 }>()
 
-const title = computed(() => (props.phase === 'flight' ? '落点' : props.phase === 'active' ? props.label : '已结束'))
+const TITLES: Record<LandingPhase, string> = { flight: '落点', active: '', ult: '', done: '已结束' }
+const title = computed(() =>
+  props.phase === 'active' ? props.label : props.phase === 'ult' ? (props.ultLabel ?? '大招') : TITLES[props.phase],
+)
 </script>
 
 <template>
@@ -64,6 +69,15 @@ const title = computed(() => (props.phase === 'flight' ? '落点' : props.phase 
 }
 .active .value {
   color: #ff8a70;
+}
+.ult {
+  border-color: rgb(255 176 46 / 0.7);
+  box-shadow:
+    var(--shadow-card),
+    0 0 12px rgb(255 176 46 / 0.35);
+}
+.ult .value {
+  color: #ffc35c;
 }
 .done {
   opacity: 0.7;

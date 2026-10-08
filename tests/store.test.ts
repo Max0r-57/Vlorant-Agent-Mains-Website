@@ -7,7 +7,7 @@ import { useLineups } from '@/stores/lineups'
 import { resetDBConnection, DB_NAME, getDB } from '@/db/database'
 import { exportBackup, parseBackup } from '@/db/backup'
 import * as repo from '@/db/repo'
-import type { Lineup, LineupPath, StoredImage } from '@/types'
+import type { Annotation, Lineup, LineupPath, StoredImage } from '@/types'
 
 function fakeImage(id: string, bytes = 32): StoredImage {
   return {
@@ -107,7 +107,7 @@ describe('lineup store', () => {
       [fakeImage('img_a', 100)],
     )
     const { blob, counts } = await exportBackup()
-    expect(counts).toEqual({ types: 3, lineups: 1, images: 1 })
+    expect(counts).toEqual({ types: 3, lineups: 1, images: 1, videos: 0 })
 
     await store.clearAll()
     expect(store.lineups).toHaveLength(0)
@@ -267,5 +267,128 @@ describe('landing reference and paths', () => {
       'backup.json': strToU8(JSON.stringify({ format: 'valorant-lineup-notebook', version: 99, lineups: [] })),
     })
     await expect(parseBackup(new Blob([zipped as Uint8Array<ArrayBuffer>]))).rejects.toThrow('更新版本')
+  })
+})
+
+function fakeVideo(id: string, bytes = 500): StoredImage {
+  return {
+    id,
+    kind: 'video',
+    duration: 12.5,
+    blob: new Blob([new Uint8Array(bytes).fill(5)], { type: 'video/mp4' }),
+    thumb: new Blob([new Uint8Array(8).fill(4)], { type: 'image/webp' }),
+    width: 1280,
+    height: 720,
+    createdAt: Date.now(),
+  }
+}
+
+const sampleAnnotations: Annotation[] = [
+  { id: 'a1', type: 'pen', color: '#ff4655', size: 12, points: [10, 10, 50, 60, 90, 20] },
+  { id: 'a2', type: 'ellipse', color: '#ffd23f', size: 8, x: 100, y: 100, w: 200, h: 120 },
+  { id: 'a3', type: 'arrow', color: '#3d9bff', size: 8, x1: 0, y1: 0, x2: 300, y2: 200 },
+  { id: 'a4', type: 'text', color: '#ffffff', size: 60, x: 400, y: 300, text: '站这里\n跳投' },
+]
+
+describe('videos and annotations', () => {
+  it('round-trips videos and image annotations through a backup', async () => {
+    const store = useLineups()
+    await store.init()
+    const image = { ...fakeImage('img_n'), annotations: sampleAnnotations }
+    await store.createLineup(
+      { name: '视频', typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' },
+      [fakeVideo('vid_1'), image],
+    )
+    const { blob, counts, external } = await exportBackup()
+    expect(counts).toMatchObject({ images: 1, videos: 1 })
+    expect(external).toEqual([])
+
+    await store.clearAll()
+    const parsed = await parseBackup(blob)
+    expect(parsed.missingImages).toBe(0)
+    await store.importBackup(reactive(parsed), 'replace')
+    const video = await repo.getImage('vid_1')
+    expect(video).toMatchObject({ kind: 'video', duration: 12.5, width: 1280, height: 720 })
+    expect(video!.blob.type).toBe('video/mp4')
+    expect(video!.blob.size).toBe(500)
+    expect((await repo.getImage('img_n'))!.annotations).toEqual(sampleAnnotations)
+    expect(store.lineups[0]!.imageIds).toEqual(['vid_1', 'img_n'])
+  })
+
+  it('reads videos kept outside the zip only from safe paths', async () => {
+    const store = useLineups()
+    await store.init()
+    await store.createLineup(
+      { name: '外部视频', typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' },
+      [fakeVideo('vid_2', 300)],
+    )
+    const { blob, external } = await exportBackup({ externalVideos: true })
+    expect(external.map((f) => f.path)).toEqual(['videos/vid_2.mp4'])
+
+    // 没有提供视频文件夹：视频被跳过，并单独统计
+    const alone = await parseBackup(blob)
+    expect(alone.images).toHaveLength(0)
+    expect(alone.missingExternal).toBe(1)
+    expect(alone.lineups[0]!.imageIds).toEqual([])
+
+    const asked: string[] = []
+    const withFolder = await parseBackup(blob, {
+      readExternal: async (path) => {
+        asked.push(path)
+        return new Blob([new Uint8Array(300)])
+      },
+    })
+    expect(asked).toEqual(['videos/vid_2.mp4'])
+    expect(withFolder.images[0]).toMatchObject({ id: 'vid_2', kind: 'video' })
+    expect(withFolder.images[0]!.blob.type).toBe('video/mp4')
+
+    // 备份里被改过的路径不会去读取
+    const evil = {
+      format: 'valorant-lineup-notebook',
+      version: 3,
+      types: [],
+      lineups: [],
+      images: [
+        { id: 'x', kind: 'video', external: true, file: 'videos/../../secret.mp4', mime: 'video/mp4', thumbFile: 't' },
+        { id: 'y', kind: 'video', external: true, file: '../outside.mp4', mime: 'video/mp4', thumbFile: 't' },
+      ],
+    }
+    asked.length = 0
+    const parsed = await parseBackup(new Blob([zipSync({ 'backup.json': strToU8(JSON.stringify(evil)) })]), {
+      readExternal: async (path) => {
+        asked.push(path)
+        return null
+      },
+    })
+    expect(asked).toEqual([])
+    expect(parsed.missingExternal).toBe(2)
+  })
+
+  it('saves annotations with a regenerated thumbnail and keeps the original image', async () => {
+    const store = useLineups()
+    await store.init()
+    const original = fakeImage('img_m')
+    await store.createLineup(
+      { name: '标注', typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' },
+      [original, fakeVideo('vid_3')],
+    )
+    const newThumb = new Blob([new Uint8Array(20).fill(1)], { type: 'image/webp' })
+    const calls: number[] = []
+    await store.annotateImage('img_m', reactive([...sampleAnnotations]), async (img, list) => {
+      calls.push(list.length)
+      expect(img.width).toBe(1920)
+      return newThumb
+    })
+    expect(calls).toEqual([4])
+    const saved = (await repo.getImage('img_m'))!
+    expect(saved.annotations).toEqual(sampleAnnotations)
+    expect(saved.thumb.size).toBe(20)
+    expect(saved.blob.size).toBe(original.blob.size)
+
+    // 清除全部标注
+    await store.annotateImage('img_m', [], async () => newThumb)
+    expect((await repo.getImage('img_m'))!.annotations).toBeUndefined()
+    await expect(store.annotateImage('vid_3', sampleAnnotations, async () => newThumb)).rejects.toThrow('视频')
+    await expect(store.annotateImage('nope', [], async () => newThumb)).rejects.toThrow()
   })
 })

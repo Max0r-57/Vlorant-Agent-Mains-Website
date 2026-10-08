@@ -46,3 +46,19 @@ export function formatBytes(bytes: number) {
   }
   return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`
 }
+
+/** 视频时长：0:12、1:05、1:02:03 */
+export function formatDuration(seconds: number) {
+  const s = Math.max(0, Math.round(Number.isFinite(seconds) ? seconds : 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`
+}
+
+/** 「3 张图片、1 个视频」；都没有时为「0 张图片」 */
+export function formatMediaCount(images: number, videos: number) {
+  const parts: string[] = []
+  if (images || !videos) parts.push(`${images} 张图片`)
+  if (videos) parts.push(`${videos} 个视频`)
+  return parts.join('、')
+}

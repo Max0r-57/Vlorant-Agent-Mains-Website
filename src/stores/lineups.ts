@@ -2,10 +2,11 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as repo from '@/db/repo'
 import { applyBackup, type ParsedBackup } from '@/db/backup'
-import { releaseAllImages, releaseImages } from '@/lib/imageCache'
+import { plainAnnotations, renderAnnotatedThumb } from '@/lib/annotations'
+import { refreshImages, releaseAllImages, releaseImages } from '@/lib/imageCache'
 import { newId } from '@/lib/id'
 import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
-import type { Lineup, LineupDraft, LineupType, StoredImage } from '@/types'
+import type { Annotation, Lineup, LineupDraft, LineupType, StoredImage } from '@/types'
 
 /** 首次使用时自动创建的类型，之后可以在设置里改名、改色或删除 */
 export const DEFAULT_TYPES: Pick<LineupType, 'name' | 'color'>[] = [
@@ -169,6 +170,24 @@ export const useLineups = defineStore('lineups', () => {
     return next
   }
 
+  /**
+   * 保存图片标注：原图不变，写入标注并重新生成带标注的缩略图。
+   * renderThumb 只在测试中替换（测试环境没有 Canvas）。
+   */
+  async function annotateImage(
+    id: string,
+    annotations: readonly Annotation[],
+    renderThumb: typeof renderAnnotatedThumb = renderAnnotatedThumb,
+  ) {
+    const img = await repo.getImage(id)
+    if (!img) throw new Error('图片不存在或已被删除')
+    if (img.kind === 'video') throw new Error('视频不能添加标注')
+    const list = plainAnnotations(annotations)
+    const thumb = await renderThumb(img, list)
+    await repo.putImage({ ...img, thumb, annotations: list })
+    refreshImages([id])
+  }
+
   async function deleteLineup(id: string) {
     const old = lineupById.value.get(id)
     if (!old) return
@@ -273,6 +292,7 @@ export const useLineups = defineStore('lineups', () => {
     init,
     createLineup,
     updateLineup,
+    annotateImage,
     deleteLineup,
     createType,
     updateType,

@@ -1,4 +1,4 @@
-import { shallowRef, triggerRef } from 'vue'
+import { shallowRef } from 'vue'
 import { distanceToPolyline, roundPos, simplifyPath, type AxisScale } from '@/lib/geometry'
 import type { Position } from '@/types'
 import type { PathEditor } from './usePathEditor'
@@ -29,7 +29,10 @@ function nearest(pos: Position, targets: readonly Position[], s: AxisScale, maxP
   return best
 }
 
-/** 收集画笔的轨迹点（相邻点至少相隔 2 像素） */
+/**
+ * 收集画笔的轨迹点（相邻点至少相隔 2 像素）。
+ * 每加一个点都换成新数组：地图上的轨迹图层靠数组引用变化来重新绘制，拖动途中就能看到画出的线。
+ */
 export function useStroke(scale: () => AxisScale | undefined) {
   const points = shallowRef<Position[] | null>(null)
 
@@ -42,8 +45,7 @@ export function useStroke(scale: () => AxisScale | undefined) {
     const s = scale()
     if (!pts || !s) return
     if (screenDist(pts[pts.length - 1]!, pos, s) < 2) return
-    pts.push(pos)
-    triggerRef(points)
+    points.value = [...pts, pos]
   }
 
   function finish() {

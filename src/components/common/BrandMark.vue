@@ -10,8 +10,8 @@ defineProps<{ compact?: boolean }>()
       <circle cx="48" cy="44" r="7.5" fill="#78fbe7" stroke="#fff" stroke-width="3" />
     </svg>
     <div v-if="!compact" class="text">
-      <span class="title">Lineup 笔记</span>
-      <span class="sub">VALORANT LINEUP NOTEBOOK</span>
+      <span class="title">无畏契约专精记忆</span>
+      <span class="sub">VALORANT MAINS MEMORY</span>
     </div>
   </div>
 </template>

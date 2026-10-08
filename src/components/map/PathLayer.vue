@@ -68,6 +68,10 @@ const drawn = computed(() =>
 
 const strokePoints = computed(() => (props.stroke && props.stroke.length > 1 ? attr(toPoints(props.stroke)) : ''))
 const strokeStart = computed(() => (props.stroke?.length ? props.px(props.stroke[0]!) : null))
+/** 正在画的线的笔尖 */
+const strokeTip = computed(() =>
+  props.stroke && props.stroke.length > 1 ? props.px(props.stroke[props.stroke.length - 1]!) : null,
+)
 </script>
 
 <template>
@@ -96,6 +100,7 @@ const strokeStart = computed(() => (props.stroke?.length ? props.px(props.stroke
       <polyline v-if="strokePoints" class="casing" :points="strokePoints" />
       <polyline v-if="strokePoints" class="line" :points="strokePoints" />
       <circle v-if="strokeStart" class="start" :cx="strokeStart.x" :cy="strokeStart.y" r="3.5" />
+      <circle v-if="strokeTip" class="tip" :cx="strokeTip.x" :cy="strokeTip.y" r="5" />
     </g>
   </svg>
 </template>
@@ -150,6 +155,12 @@ polyline {
 }
 .drawing .line {
   stroke: var(--path-hi);
+}
+.tip {
+  fill: #fff;
+  stroke: var(--path);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 4px rgb(61 139 255 / 0.9));
 }
 .preview {
   opacity: 0.8;

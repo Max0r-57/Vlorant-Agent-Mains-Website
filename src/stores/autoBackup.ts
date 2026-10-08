@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, markRaw, ref, shallowRef, toRaw } from 'vue'
-import { exportBackup, parseBackup, readBackupSummary } from '@/db/backup'
+import { exportBackup, parseBackup, readBackupSummary, readExternalPaths, type ExternalFile } from '@/db/backup'
 import { deleteMeta, getMeta, setMeta } from '@/db/repo'
 import { BACKUP_GUIDE_URL } from '@/data/links'
 import {
@@ -21,6 +21,8 @@ import { useLineups } from './lineups'
  * - 用户选择一个文件夹后，每次新增 / 修改 / 删除 Lineup 或类型，稍等几秒就把全部数据
  *   打包写进 lineup-auto-<日期>.zip（每天一个文件，当天的修改覆盖当天的文件），
  *   并按设置只保留最近若干天的自动备份。
+ * - 视频不放进每天的压缩包（太大，每次修改都重写很慢），而是单独写进文件夹的 videos 子文件夹，
+ *   每个视频只写一次；当所有保留的自动备份都不再引用某个视频时才删除它。
  * - 文件夹的访问句柄保存在 IndexedDB 里，下次打开网站自动继续使用；
  *   浏览器可能要求重新授权，这时界面上会出现「允许访问」的提示。
  * - 没有任何 Lineup 时不会写入，避免空数据覆盖之前的备份。
@@ -28,6 +30,8 @@ import { useLineups } from './lineups'
  */
 
 const META_KEY = 'autoBackup'
+/** 备份文件夹里存放视频的子文件夹 */
+const VIDEO_DIR = 'videos'
 const DEBOUNCE_MS = 3000
 export const KEEP_DAY_OPTIONS = [3, 7, 14, 30, 0] as const
 const DEFAULT_KEEP_DAYS = 7
@@ -56,6 +60,7 @@ export type BackupOutcome =
 const MUTATIONS = new Set([
   'createLineup',
   'updateLineup',
+  'annotateImage',
   'deleteLineup',
   'createType',
   'updateType',
@@ -194,11 +199,45 @@ export const useAutoBackup = defineStore('autoBackup', () => {
     schedule()
   }
 
+  /** 删除超出保留天数的自动备份，返回删掉的文件名 */
   async function prune(handle: FileSystemDirectoryHandle, today: string) {
     const names = await fsa.listFileNames(handle, (n) => parseBackupFileName(n)?.kind === 'auto')
-    for (const name of autoBackupsToPrune(names, keepDays.value, today)) {
-      await fsa.removeFile(handle, name)
+    const removed = autoBackupsToPrune(names, keepDays.value, today)
+    for (const name of removed) await fsa.removeFile(handle, name)
+    if (removed.length) await pruneVideos(handle)
+    return removed
+  }
+
+  /** 把视频写进 videos 子文件夹：已经有同样大小的文件就跳过（同一个视频的内容不会变） */
+  async function writeVideos(handle: FileSystemDirectoryHandle, files: ExternalFile[]) {
+    if (!files.length) return
+    const dir = (await fsa.getSubdirectory(handle, VIDEO_DIR, true))!
+    const existing = new Map((await fsa.listFiles(dir, () => true)).map((f) => [f.name, f.size]))
+    for (const f of files) {
+      const name = f.path.slice(VIDEO_DIR.length + 1)
+      if (existing.get(name) !== f.blob.size) await fsa.writeFile(dir, name, f.blob)
     }
+  }
+
+  /** 删除所有自动备份都不再引用的视频；有备份读不出来时为了安全不删除任何视频 */
+  async function pruneVideos(handle: FileSystemDirectoryHandle) {
+    const dir = await fsa.getSubdirectory(handle, VIDEO_DIR)
+    if (!dir) return
+    const videos = await fsa.listFileNames(dir, () => true)
+    if (!videos.length) return
+    const keep = new Set<string>()
+    for (const name of await fsa.listFileNames(handle, (n) => parseBackupFileName(n)?.kind === 'auto')) {
+      for (const path of await readExternalPaths(await fsa.readFile(handle, name))) keep.add(path)
+    }
+    for (const name of videos) {
+      if (!keep.has(`${VIDEO_DIR}/${name}`)) await fsa.removeFile(dir, name)
+    }
+  }
+
+  /** 读取备份引用的视频（路径已由 parseBackup 校验为 videos/<文件名>） */
+  async function readVideo(handle: FileSystemDirectoryHandle, path: string): Promise<Blob | null> {
+    const dir = await fsa.getSubdirectory(handle, VIDEO_DIR)
+    return dir ? fsa.readFile(dir, path.slice(VIDEO_DIR.length + 1)).catch(() => null) : null
   }
 
   /** 立即备份（自动备份最终也调用这里） */
@@ -222,9 +261,11 @@ export const useAutoBackup = defineStore('autoBackup', () => {
     running.value = true
     const seq = changeSeq
     try {
-      const { blob, counts } = await exportBackup()
+      const { blob, counts, external } = await exportBackup({ externalVideos: true })
       const now = new Date()
       const name = autoBackupFileName(now)
+      // 先写视频，再写引用这些视频的压缩包
+      await writeVideos(handle, external)
       await fsa.writeFile(handle, name, blob)
       // 清理旧备份失败不影响这次备份本身
       await prune(handle, localDateKey(now)).catch(() => {})
@@ -309,8 +350,9 @@ export const useAutoBackup = defineStore('autoBackup', () => {
   }
 
   async function readBackup(name: string) {
-    if (!dir.value) throw new Error('还没有选择备份文件夹')
-    return parseBackup(await fsa.readFile(dir.value, name))
+    const handle = dir.value
+    if (!handle) throw new Error('还没有选择备份文件夹')
+    return parseBackup(await fsa.readFile(handle, name), { readExternal: (path) => readVideo(handle, path) })
   }
 
   async function readSummary(name: string) {

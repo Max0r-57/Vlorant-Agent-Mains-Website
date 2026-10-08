@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { MOVE_MODES, MOVE_MODE_BY_ID, moveSpeed } from '@/data/movement'
 import { mapMetric } from '@/lib/geometry'
-import { buildRoute, formatClock, formatDuration, landingPhase, positionOnRoute } from '@/lib/rehearsal'
+import { landingSpec } from '@/data/landing'
+import {
+  buildRoute,
+  clampSpikeSeconds,
+  formatClock,
+  formatDuration,
+  landingPhase,
+  positionOnRoute,
+  SPIKE_SECONDS,
+} from '@/lib/rehearsal'
 import type { LineupPath } from '@/types'
 
 // 100 m wide map → 1 m = 100 units
@@ -83,6 +92,30 @@ describe('rehearsal route', () => {
     expect(landingPhase(3, 2, 7.5)).toEqual({ phase: 'active', remaining: 6.5 })
     expect(landingPhase(9.5, 2, 7.5)).toEqual({ phase: 'done', remaining: 0 })
     expect(landingPhase(0, 0, 7.5).phase).toBe('active')
+  })
+
+  it('adds the ultimate after the ability when it is turned on', () => {
+    // 落点 2 秒 + 燃烧弹 7.5 秒 + 天基光束 7 秒
+    expect(landingPhase(5, 2, 7.5, 7)).toEqual({ phase: 'active', remaining: 4.5 })
+    expect(landingPhase(9.5, 2, 7.5, 7)).toEqual({ phase: 'ult', remaining: 7 })
+    expect(landingPhase(12, 2, 7.5, 7)).toEqual({ phase: 'ult', remaining: 4.5 })
+    expect(landingPhase(16.5, 2, 7.5, 7)).toEqual({ phase: 'done', remaining: 0 })
+    // 没打开大招时和以前一样
+    expect(landingPhase(9.5, 2, 7.5, 0).phase).toBe('done')
+    const brim = landingSpec('brimstone')!
+    expect(brim.ultimate).toMatchObject({ label: '天基光束', duration: 7 })
+    expect(landingSpec('viper')).toBeUndefined()
+  })
+
+  it('keeps the spike start time within 0–45 seconds', () => {
+    expect(SPIKE_SECONDS).toBe(45)
+    expect(clampSpikeSeconds(30)).toBe(30)
+    expect(clampSpikeSeconds('25.55')).toBe(25.6)
+    expect(clampSpikeSeconds(80)).toBe(45)
+    expect(clampSpikeSeconds(-3)).toBe(0)
+    expect(clampSpikeSeconds('')).toBe(45)
+    expect(clampSpikeSeconds('abc')).toBe(45)
+    expect(clampSpikeSeconds(undefined)).toBe(45)
   })
 
   it('formats clocks to a tenth of a second', () => {

@@ -1,26 +1,28 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
 import { backupFileName, exportBackup, parseBackup, type ParsedBackup } from '@/db/backup'
 import { imageStats } from '@/db/repo'
-import { formatBytes, formatDateTime } from '@/lib/format'
+import { formatBytes, formatDateTime, formatMediaCount } from '@/lib/format'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
 import Icon from '@/components/common/Icon.vue'
 import AutoBackupSettings from './AutoBackupSettings.vue'
 
-/** 数据管理：存储占用、导出 / 导入备份、清理图片、清空数据 */
+/** 数据管理：存储占用、导出 / 导入备份、清理图片 / 视频、清空数据 */
 const store = useLineups()
 const ui = useUi()
 
 const LAST_EXPORT_KEY = 'lineup-notebook:lastExport'
 
-const images = ref<{ count: number; bytes: number } | null>(null)
+const images = ref<{ count: number; videos: number; bytes: number } | null>(null)
 const quota = ref<{ usage: number; quota: number } | null>(null)
 const persisted = ref<boolean | null>(null)
 const lastExport = ref<number | null>(readLastExport())
 const busy = ref<'' | 'export' | 'import' | 'cleanup' | 'clear'>('')
 const fileInput = ref<HTMLInputElement>()
 const pending = shallowRef<{ file: string; data: ParsedBackup } | null>(null)
+/** 待导入备份里的图片数量（不含视频） */
+const pendingImages = computed(() => pending.value?.data.images.filter((i) => i.kind !== 'video').length ?? 0)
 const importCard = ref<HTMLElement>()
 
 /** 从自动备份文件夹里选了一份备份：和手动选择文件一样，先显示内容再确认导入 */
@@ -75,7 +77,7 @@ async function doExport() {
     } catch {
       /* 忽略 */
     }
-    ui.toast(`已导出 ${counts.lineups} 个 Lineup、${counts.images} 张图片`)
+    ui.toast(`已导出 ${counts.lineups} 个 Lineup、${formatMediaCount(counts.images, counts.videos)}`)
   } catch (e) {
     ui.toast(e instanceof Error ? `导出失败：${e.message}` : '导出失败', { kind: 'error' })
   } finally {
@@ -127,7 +129,7 @@ async function cleanup() {
   busy.value = 'cleanup'
   try {
     const n = await store.cleanupImages()
-    ui.toast(n ? `已清理 ${n} 张未使用的图片` : '没有需要清理的图片')
+    ui.toast(n ? `已清理 ${n} 个未使用的图片 / 视频` : '没有需要清理的图片 / 视频')
     await refresh()
   } finally {
     busy.value = ''
@@ -137,7 +139,7 @@ async function cleanup() {
 async function clearAll() {
   const ok = await ui.confirm({
     title: '清空所有数据？',
-    message: `将永久删除全部 ${store.lineups.length} 个 Lineup、所有图片和自定义类型，建议先导出备份。此操作无法撤销。\n自动备份也会同时关闭，备份文件夹里已有的文件不会被删除。`,
+    message: `将永久删除全部 ${store.lineups.length} 个 Lineup、所有图片、视频和自定义类型，建议先导出备份。此操作无法撤销。\n自动备份也会同时关闭，备份文件夹里已有的文件不会被删除。`,
     confirmText: '全部清空',
     danger: true,
   })
@@ -171,11 +173,11 @@ async function clearAll() {
       </div>
       <div class="stat">
         <span class="stat-value tabular">{{ images?.count ?? '—' }}</span>
-        <span class="stat-label">图片</span>
+        <span class="stat-label">图片 / 视频<template v-if="images?.videos">（视频 {{ images.videos }}）</template></span>
       </div>
       <div class="stat">
         <span class="stat-value tabular">{{ images ? formatBytes(images.bytes) : '—' }}</span>
-        <span class="stat-label">图片占用</span>
+        <span class="stat-label">图片 / 视频占用</span>
       </div>
     </div>
     <div v-if="quota && quota.quota" class="quota">
@@ -202,7 +204,7 @@ async function clearAll() {
       <div class="s-row-text">
         <span class="s-row-label">导出备份</span>
         <span class="s-row-hint">
-          打包为一个 .zip 文件（包含全部 Lineup、类型和图片）。
+          打包为一个 .zip 文件（包含全部 Lineup、类型、图片和视频）。
           <template v-if="lastExport">上次导出：{{ formatDateTime(lastExport) }}</template>
           <template v-else>还没有导出过备份。</template>
         </span>
@@ -231,10 +233,15 @@ async function clearAll() {
           <p class="import-file ellipsis">{{ pending.file }}</p>
           <p class="s-row-hint">
             导出于 {{ formatDateTime(pending.data.exportedAt) }} · {{ pending.data.lineups.length }} 个 Lineup ·
-            {{ pending.data.types.length }} 个类型 · {{ pending.data.images.length }} 张图片
+            {{ pending.data.types.length }} 个类型 ·
+            {{ formatMediaCount(pendingImages, pending.data.images.length - pendingImages) }}
           </p>
-          <p v-if="pending.data.missingImages" class="field-error">
-            有 {{ pending.data.missingImages }} 张图片在压缩包中缺失，对应的图片引用会被跳过
+          <p v-if="pending.data.missingExternal" class="field-error">
+            这份自动备份里有 {{ pending.data.missingExternal }} 个视频保存在备份文件夹的 videos 子文件夹中，单独选择压缩包时读不到。
+            请在上面的「自动备份到文件夹」里选择这个备份文件夹后，从列表里恢复；或者继续导入（这些视频会被跳过）
+          </p>
+          <p v-if="pending.data.missingImages > pending.data.missingExternal" class="field-error">
+            有 {{ pending.data.missingImages - pending.data.missingExternal }} 个图片 / 视频在压缩包中缺失，对应的引用会被跳过
           </p>
         </div>
       </div>

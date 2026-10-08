@@ -236,7 +236,7 @@ function openImages(l: Lineup) {
           <button
             type="button"
             class="cover"
-            :title="l.imageIds.length ? '点击查看大图' : '暂无图片'"
+            :title="l.imageIds.length ? '点击查看图片 / 视频' : '暂无图片'"
             @click="openImages(l)"
           >
             <LineupThumb :image-id="l.imageIds[0]" :color="store.typeColor(l.typeId)" :alt="l.name" />

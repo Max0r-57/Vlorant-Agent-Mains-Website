@@ -309,7 +309,7 @@ function onDrawTap(p: DrawPayload) {
 }
 
 // ---------- 现场演练 ----------
-const rehearsal = useRehearsal()
+const rehearsal = useRehearsal({ ultimate: () => prefs.rehearsalUltimate })
 let viewBeforeRehearsal: ViewState | null = null
 const rehearsalLandingVisible = computed(() => {
   if (!rehearsal.landing) return false
@@ -519,7 +519,8 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
                 v-if="rehearsal.landing && rehearsalLandingVisible"
                 :style="at(rehearsal.landing)"
                 :diameter="landingDiameter(size.w)"
-                :color="spec?.color"
+                :color="rehearsal.landingState?.phase === 'ult' ? rehearsal.ultimateSpec?.color : spec?.color"
+                :beam="rehearsal.landingState?.phase === 'ult'"
                 :dim="rehearsal.landingState?.phase === 'done'"
               />
               <PathLayer :paths="paths" :px="px" :size="size" />
@@ -530,6 +531,7 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
                 :phase="rehearsal.landingState.phase"
                 :remaining="rehearsal.landingState.remaining"
                 :label="rehearsal.spec.label"
+                :ult-label="rehearsal.ultimateSpec?.label"
                 :offset="(landingDiameter(size.w) ?? 0) / 2"
               />
               <RehearsalDot v-if="rehearsal.dot" :style="at(rehearsal.dot)" :moving="rehearsal.moving" />
@@ -615,7 +617,15 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
             </div>
 
             <template v-if="mode === 'rehearsal'">
-              <RehearsalTimers class="rehearsal-timers" :elapsed="rehearsal.travel" />
+              <RehearsalTimers
+                v-model:spike-start="prefs.spikeSeconds"
+                v-model:ultimate="prefs.rehearsalUltimate"
+                class="rehearsal-timers"
+                :elapsed="rehearsal.travel"
+                :ult-label="rehearsal.ultimateSpec?.label"
+                :ult-seconds="rehearsal.ultimateSpec?.duration"
+                :ult-after="rehearsal.spec?.label"
+              />
               <RehearsalControls
                 class="rehearsal-controls"
                 :finished="rehearsal.finished"
@@ -821,7 +831,6 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
   position: absolute;
   left: 12px;
   top: 12px;
-  pointer-events: none;
 }
 .rehearsal-controls {
   position: absolute;
