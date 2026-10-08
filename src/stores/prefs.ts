@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { reactive, watch } from 'vue'
 import { DEFAULT_AGENT_ID, AGENT_BY_ID } from '@/data/agents'
 import { DEFAULT_MAP_ID, MAP_BY_ID } from '@/data/maps'
+import { clampSpikeSeconds, SPIKE_SECONDS } from '@/lib/rehearsal'
 
 export type MarkerSize = 'sm' | 'md' | 'lg'
 export type AreaSearchBy = 'landing' | 'position'
@@ -24,6 +25,10 @@ export interface Prefs {
   showPortrait: boolean
   /** 圈画搜索按落点还是按站位（Lineup 位置）搜索 */
   areaSearchBy: AreaSearchBy
+  /** 现场演练开始时爆能器的剩余时间（秒），在演练计时器里修改 */
+  spikeSeconds: number
+  /** 现场演练时在技能结束后接上大招（炼狱：天基光束） */
+  rehearsalUltimate: boolean
 }
 
 const STORAGE_KEY = 'lineup-notebook:prefs'
@@ -40,6 +45,8 @@ const DEFAULTS: Prefs = {
   hintDismissed: false,
   showPortrait: true,
   areaSearchBy: 'landing',
+  spikeSeconds: SPIKE_SECONDS,
+  rehearsalUltimate: false,
 }
 
 function load(): Prefs {
@@ -51,6 +58,8 @@ function load(): Prefs {
     if (!MAP_BY_ID.has(prefs.mapId)) prefs.mapId = DEFAULT_MAP_ID
     if (!AGENT_BY_ID.has(prefs.agentId)) prefs.agentId = DEFAULT_AGENT_ID
     if (prefs.areaSearchBy !== 'position') prefs.areaSearchBy = 'landing'
+    prefs.spikeSeconds = clampSpikeSeconds(prefs.spikeSeconds)
+    prefs.rehearsalUltimate = prefs.rehearsalUltimate === true
     return prefs
   } catch {
     return { ...DEFAULTS }

@@ -480,7 +480,7 @@ function onDrawHover(p: DrawPayload | null) {
 }
 
 // ---------- 现场演练 ----------
-const rehearsal = useRehearsal()
+const rehearsal = useRehearsal({ ultimate: () => prefs.rehearsalUltimate })
 const rehearsalId = ref<string | null>(null)
 const rehearsalLineup = computed(() => (rehearsalId.value ? store.lineupById.get(rehearsalId.value) : undefined))
 /** 演练前的状态，结束演练时恢复 */
@@ -678,7 +678,12 @@ const mapPadding = computed(() =>
               v-if="rehearsal.landing && rehearsalLandingVisible"
               :style="at(rehearsal.landing)"
               :diameter="landingDiameter(rehearsalLineup.agentId, size.w)"
-              :color="landingColor(rehearsalLineup.agentId)"
+              :color="
+                rehearsal.landingState?.phase === 'ult'
+                  ? rehearsal.ultimateSpec?.color
+                  : landingColor(rehearsalLineup.agentId)
+              "
+              :beam="rehearsal.landingState?.phase === 'ult'"
               :dim="rehearsal.landingState?.phase === 'done'"
             />
             <PathLayer :paths="rehearsalLineup.paths" :px="px" :size="size" />
@@ -695,6 +700,7 @@ const mapPadding = computed(() =>
               :phase="rehearsal.landingState.phase"
               :remaining="rehearsal.landingState.remaining"
               :label="rehearsal.spec.label"
+              :ult-label="rehearsal.ultimateSpec?.label"
               :offset="(landingDiameter(rehearsalLineup.agentId, size.w) ?? 0) / 2"
             />
             <RehearsalDot v-if="rehearsal.dot" :style="at(rehearsal.dot)" :moving="rehearsal.moving" />
@@ -816,7 +822,16 @@ const mapPadding = computed(() =>
                 <template v-else>{{ scoped.length }} 个 Lineup</template>
                 <button v-if="filters.active" type="button" class="link" @click="filters.clear()">清除筛选</button>
               </p>
-              <RehearsalTimers v-if="mode === 'rehearsal'" class="timers" :elapsed="rehearsal.travel" />
+              <RehearsalTimers
+                v-if="mode === 'rehearsal'"
+                v-model:spike-start="prefs.spikeSeconds"
+                v-model:ultimate="prefs.rehearsalUltimate"
+                class="timers"
+                :elapsed="rehearsal.travel"
+                :ult-label="rehearsal.ultimateSpec?.label"
+                :ult-seconds="rehearsal.ultimateSpec?.duration"
+                :ult-after="rehearsal.spec?.label"
+              />
             </div>
           </div>
 

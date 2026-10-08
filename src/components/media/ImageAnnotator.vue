@@ -795,14 +795,16 @@ const selectionBox = computed(() => {
 }
 .area {
   position: relative;
-  display: grid;
+  display: flex;
   flex: 1;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
   overflow: hidden;
 }
 .frame {
   position: relative;
+  flex: none;
   touch-action: none;
   user-select: none;
   box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);

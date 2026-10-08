@@ -493,6 +493,7 @@ watch(
             <div
               ref="frameEl"
               class="frame"
+              :class="{ sizing: !display }"
               :style="display ? { width: `${display.w}px`, height: `${display.h}px` } : undefined"
             >
               <video
@@ -517,7 +518,7 @@ watch(
             v-else-if="view.full || view.poster"
             ref="frameEl"
             class="frame"
-            :class="{ animating }"
+            :class="{ animating, sizing: !display }"
             :style="{
               width: display ? `${display.w}px` : undefined,
               height: display ? `${display.h}px` : undefined,
@@ -618,7 +619,8 @@ watch(
   justify-content: center;
   min-height: 0;
   overflow: hidden;
-  padding: 0 64px;
+  /* 图片按这个区域（去掉内边距）等比缩小，上下左右都留一点空隙，不会超出窗口 */
+  padding: 12px 64px;
   cursor: zoom-in;
   touch-action: none;
 }
@@ -640,6 +642,10 @@ watch(
 }
 .frame.animating {
   transition: transform 0.2s var(--ease);
+}
+/* 还不知道图片尺寸时先不显示，避免按原始大小闪一下 */
+.frame.sizing {
+  visibility: hidden;
 }
 .frame > img,
 .player {
@@ -763,7 +769,7 @@ watch(
 }
 @media (max-width: 640px) {
   .stage {
-    padding: 0 8px;
+    padding: 8px;
   }
   .nav {
     display: none;
