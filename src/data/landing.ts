@@ -41,7 +41,7 @@ const SPECS: Record<string, LandingSpec> = {
     diameter: 7,
     duration: 7.5,
     color: '#ff4d2e',
-    ultimate: { label: '天基光束', duration: 7, color: '#ffb02e' },
+    ultimate: { label: '天基光束', duration: 8, color: '#ffb02e' },
   },
 }
 
