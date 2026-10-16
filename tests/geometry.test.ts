@@ -13,13 +13,15 @@ import {
 import { normalizeDelay, pathName, sanitizeLanding, sanitizePaths } from '@/lib/paths'
 
 describe('map scale', () => {
-  it('uses the Ascent B main hall (20 m ≈ 150 px of 1065 px) as the reference', () => {
+  it('uses the Ascent reference room (20 m = 144.5 px of the 1024 px image)', () => {
     const m = mapMetric(DEFAULT_MAP_WIDTH_METERS)
-    // 150 / 1065 of the map width ≈ 1408 units
-    const d = distanceMeters({ x: 2254, y: 4845 }, { x: 2254, y: 4845 + (150 / 1065) * 10000 }, m)
+    // 参考图里的红线：y = 738，x 从 497.5 到 642（144.5 / 1024 of the map width）
+    const toPos = (px: number) => (px / 1024) * 10000
+    const d = distanceMeters({ x: toPos(497.5), y: toPos(738) }, { x: toPos(642), y: toPos(738) }, m)
     expect(d).toBeCloseTo(20, 1)
-    // a 2 m molly is ≈ 1.4 % of the map width (≈ 15 px on the 1065 px image)
-    expect((2 / DEFAULT_MAP_WIDTH_METERS) * 1065).toBeCloseTo(15, 0)
+    // 1 m ≈ 7.2 px; the 7 m molly is ≈ 51 px across on the 1024 px image
+    expect(1024 / DEFAULT_MAP_WIDTH_METERS).toBeCloseTo(7.23, 2)
+    expect((7 / DEFAULT_MAP_WIDTH_METERS) * 1024).toBeCloseTo(50.6, 1)
   })
 
   it('keeps metres isotropic on non-square images', () => {

@@ -6,12 +6,12 @@
  * 以后要给其他英雄加图案，在下面的表里加一行即可。
  *
  * ultimate：可以接在技能后面的大招。现场演练时计时器旁边会出现它的开关，
- * 打开后，技能持续时间结束时再倒数大招的持续时间（炼狱：天基光束 7 秒，可以改 duration）。
+ * 打开后，技能持续时间结束时再倒数大招的持续时间（炼狱：天基光束，可以改 duration）。
  *
  * 调整红圈大小：只改下面的 diameter（单位是游戏内的米，可以写小数，如 3.5）。
- * 地图上显示的大小 = diameter ÷ 地图宽度米数（src/data/maps.ts 的 DEFAULT_MAP_WIDTH_METERS，142）× 地图当前显示宽度，
- * 换算到 1065 像素宽的原始地图图片上：1 米 = 7.5 像素。
- * 例如想让红圈在原图上直径约 30 像素，就填 30 ÷ 7.5 = 4。
+ * 地图上显示的大小 = diameter ÷ 地图宽度米数（src/data/maps.ts 的 DEFAULT_MAP_WIDTH_METERS，141.7）× 地图当前显示宽度，
+ * 换算到 1024 像素宽的地图图片上：1 米 ≈ 7.2 像素。
+ * 例如想让红圈在原图上直径约 30 像素，就填 30 ÷ 7.2 ≈ 4.2。
  */
 export interface UltimateSpec {
   /** 大招名称 */
@@ -38,10 +38,10 @@ export interface LandingSpec {
 const SPECS: Record<string, LandingSpec> = {
   brimstone: {
     label: '燃烧弹',
-    diameter: 7,
+    diameter: 8,
     duration: 7.5,
     color: '#ff4d2e',
-    ultimate: { label: '天基光束', duration: 8, color: '#ffb02e' },
+    ultimate: { label: '天基光束', duration: 7, color: '#ffb02e' },
   },
 }
 

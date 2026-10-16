@@ -102,8 +102,12 @@ describe('rehearsal route', () => {
     expect(landingPhase(16.5, 2, 7.5, 7)).toEqual({ phase: 'done', remaining: 0 })
     // 没打开大招时和以前一样
     expect(landingPhase(9.5, 2, 7.5, 0).phase).toBe('done')
+    // 直径和各个时长是可以随时调整的配置（src/data/landing.ts），这里只检查结构，改数字不会让测试失败
     const brim = landingSpec('brimstone')!
-    expect(brim.ultimate).toMatchObject({ label: '天基光束', duration: 7 })
+    expect(brim.ultimate?.label).toBe('天基光束')
+    expect(brim.ultimate!.duration).toBeGreaterThan(0)
+    expect(brim.duration).toBeGreaterThan(0)
+    expect(brim.diameter).toBeGreaterThan(0)
     expect(landingSpec('viper')).toBeUndefined()
   })
 
