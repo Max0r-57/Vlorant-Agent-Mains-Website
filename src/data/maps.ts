@@ -1,7 +1,7 @@
 /**
  * 地图配置
  *
- * 新增地图：把俯瞰图放进 src/assets/maps/，文件名与 id 一致（如 bind.png），
+ * 新增地图：把俯瞰图放进 src/assets/maps/，文件名与 id 一致（如 bind.webp，png / jpg 也可以），
  * 然后在下面的列表里加一行即可。数组顺序就是下拉菜单里的顺序。
  */
 export interface MapDef {
@@ -19,11 +19,13 @@ export interface MapDef {
 /**
  * 地图比例尺（用于燃烧弹范围、路径长度和现场演练）。
  *
- * 以亚海悬城 B 大厅为参照：两侧墙之间 20 米，在 1065 像素宽的地图图片上约 150 像素，
- * 所以整张图片宽约 1065 ÷ 150 × 20 = 142 米。其他地图沿用同一比例；
- * 如果某张地图的比例不同，在下面的列表里给它单独加上 widthMeters 即可。
+ * 地图图片都是 1024 × 1024 像素、比例相同。以亚海悬城为参照：图片下方中间那个房间
+ * （参考图里红线的位置，y ≈ 738）两侧墙之间 20 米，在图片上是 144.5 像素（x 从 497.5 到 642），
+ * 所以 1 米 ≈ 7.2 像素，整张图片宽 1024 ÷ 144.5 × 20 ≈ 141.7 米。
+ * 如果某张地图的比例不同，在下面的列表里给它单独加上 widthMeters 即可
+ * （在那张图上量一段已知长度：widthMeters = 1024 ÷ 像素长度 × 米数）。
  */
-export const DEFAULT_MAP_WIDTH_METERS = 142
+export const DEFAULT_MAP_WIDTH_METERS = 141.7
 
 const MAP_LIST: Omit<MapDef, 'image'>[] = [
   { id: 'ascent', name: '亚海悬城', en: 'Ascent' },
@@ -33,6 +35,11 @@ const MAP_LIST: Omit<MapDef, 'image'>[] = [
   { id: 'sunset', name: '日落之城', en: 'Sunset' },
   { id: 'abyss', name: '幽邃地窟', en: 'Abyss' },
   { id: 'tianshu', name: '天枢云阙' },
+  { id: 'bind', name: '源工重镇', en: 'Bind' },
+  { id: 'breeze', name: '微风岛屿', en: 'Breeze' },
+  { id: 'fracture', name: '裂变峡谷', en: 'Fracture' },
+  { id: 'pearl', name: '深海明珠', en: 'Pearl' },
+  { id: 'corrode', name: '盐海矿镇', en: 'Corrode' },
 ]
 
 const images = import.meta.glob<string>('../assets/maps/*.{png,jpg,jpeg,webp}', {
