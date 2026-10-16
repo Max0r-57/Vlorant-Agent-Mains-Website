@@ -38,10 +38,10 @@ export interface LandingSpec {
 const SPECS: Record<string, LandingSpec> = {
   brimstone: {
     label: '燃烧弹',
-    diameter: 7,
+    diameter: 8,
     duration: 7.5,
     color: '#ff4d2e',
-    ultimate: { label: '天基光束', duration: 8, color: '#ffb02e' },
+    ultimate: { label: '天基光束', duration: 7, color: '#ffb02e' },
   },
 }
 
