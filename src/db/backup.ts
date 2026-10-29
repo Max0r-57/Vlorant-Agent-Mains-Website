@@ -1,9 +1,9 @@
 import { strFromU8, strToU8 } from 'fflate'
 import { toRaw } from 'vue'
 import { POS_MAX, type Lineup, type LineupType, type StoredImage } from '@/types'
-import { plainAnnotations, sanitizeAnnotations } from '@/lib/annotations'
+import { plainAnnotations, sanitizeAnnotations, sanitizeCrop } from '@/lib/annotations'
 import { extForMime } from '@/lib/image'
-import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
+import { plainLanding, plainRoutes, sanitizeLanding, sanitizeRoutes } from '@/lib/paths'
 import { createZip, openZip, type ZipArchive, type ZipInput } from '@/lib/zip'
 import { getDB } from './database'
 
@@ -16,12 +16,13 @@ import { getDB } from './database'
  *
  * 版本 2：Lineup 增加了落点参照（landing）和路径（paths）。
  * 版本 3：增加了视频和图片标注（annotations）。
+ * 版本 4：路径改为可以命名的多个版本（routes，旧备份的 paths 读成「版本1」），增加 Bug / 失效标记（bug、invalid）。
  * 自动备份的压缩包不含视频本身（标记为 external）：视频单独存放在备份文件夹的 videos 子文件夹里，
  * 只写一次，不会每次修改都重写，恢复时再从那里读取。
  * 旧版本的备份仍然可以导入；旧版网站会拒绝导入新版本的备份，避免丢失数据。
  */
 export const BACKUP_FORMAT = 'valorant-lineup-notebook'
-export const BACKUP_VERSION = 3
+export const BACKUP_VERSION = 4
 
 interface ImageEntry {
   id: string
@@ -37,6 +38,7 @@ interface ImageEntry {
   thumbMime: string
   duration?: number
   annotations?: unknown[]
+  crop?: unknown
   /** 文件不在压缩包里，而在备份文件夹中（自动备份的视频） */
   external?: true
 }
@@ -116,6 +118,7 @@ export async function exportBackup(opts: { externalVideos?: boolean } = {}) {
       entry.duration = img.duration ?? 0
     }
     if (img.annotations?.length) entry.annotations = plainAnnotations(img.annotations)
+    if (img.crop) entry.crop = { x: img.crop.x, y: img.crop.y, w: img.crop.w, h: img.crop.h }
     if (video && opts.externalVideos) {
       entry.external = true
       external.push({ path: file, blob: img.blob })
@@ -261,6 +264,8 @@ export async function parseBackup(
     } else {
       const annotations = sanitizeAnnotations(e.annotations)
       if (annotations.length) img.annotations = annotations
+      const crop = sanitizeCrop(e.crop, img.width, img.height)
+      if (crop) img.crop = crop
     }
     images.push(img)
   }
@@ -288,7 +293,9 @@ export async function parseBackup(
         imageIds: kept,
         note: str(l.note),
         landing: sanitizeLanding(l.landing),
-        paths: sanitizePaths(l.paths),
+        routes: sanitizeRoutes(l.routes, l.paths),
+        bug: l.bug === true,
+        invalid: l.bug === true && l.invalid === true,
         createdAt,
         updatedAt: num(l.updatedAt, createdAt),
       }
@@ -310,11 +317,17 @@ export async function applyBackup(input: ParsedBackup, mode: 'merge' | 'replace'
   const images = toRaw(backup.images).map((item) => {
     const i = { ...toRaw(item) }
     if (i.annotations) i.annotations = plainAnnotations(i.annotations)
+    if (i.crop) i.crop = { ...toRaw(i.crop) }
     return i
   })
   let lineups = toRaw(backup.lineups).map((l) => {
     const raw = toRaw(l)
-    return { ...raw, imageIds: [...toRaw(raw.imageIds)], landing: plainLanding(raw.landing), paths: plainPaths(raw.paths) }
+    return {
+      ...raw,
+      imageIds: [...toRaw(raw.imageIds)],
+      landing: plainLanding(raw.landing),
+      routes: plainRoutes(toRaw(raw.routes)),
+    }
   })
 
   const db = await getDB()

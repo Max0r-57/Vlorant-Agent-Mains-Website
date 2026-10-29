@@ -1,6 +1,6 @@
 import { toRaw } from 'vue'
 import { plainAnnotations } from '@/lib/annotations'
-import { plainLanding, plainPaths } from '@/lib/paths'
+import { plainLanding, plainRoutes, sanitizeRoutes } from '@/lib/paths'
 import type { Lineup, LineupType, StoredImage } from '@/types'
 import { getDB } from './database'
 
@@ -9,12 +9,15 @@ import { getDB } from './database'
  * 所以写入前统一转成普通对象。
  */
 function plainLineup(l: Lineup): Lineup {
-  const raw = toRaw(l)
+  // 直接从数据库读出的旧数据可能还是 paths 字段（还没有 routes），保存时转成新格式
+  const { paths: legacyPaths, ...raw } = toRaw(l) as Lineup & { paths?: unknown }
   return {
     ...raw,
     imageIds: [...toRaw(raw.imageIds)],
     landing: plainLanding(raw.landing),
-    paths: plainPaths(raw.paths),
+    routes: raw.routes ? plainRoutes(toRaw(raw.routes)) : sanitizeRoutes(undefined, legacyPaths),
+    bug: raw.bug === true,
+    invalid: raw.invalid === true,
   }
 }
 
@@ -37,6 +40,7 @@ function plainImage(img: StoredImage): StoredImage {
     plain.duration = raw.duration ?? 0
   }
   if (raw.annotations?.length) plain.annotations = plainAnnotations(raw.annotations)
+  if (raw.crop) plain.crop = { x: raw.crop.x, y: raw.crop.y, w: raw.crop.w, h: raw.crop.h }
   return plain
 }
 

@@ -11,6 +11,7 @@ import {
   textBackground,
   textSize,
   translateAnnotation,
+  sanitizeCrop,
 } from '@/lib/annotations'
 import { formatDuration, formatMediaCount } from '@/lib/format'
 import type { Annotation } from '@/types'
@@ -20,11 +21,22 @@ const circle: Annotation = { id: 'c', type: 'ellipse', color: '#ffd23f', size: 6
 const arrow: Annotation = { id: 'a', type: 'arrow', color: '#3d9bff', size: 8, x1: 400, y1: 400, x2: 600, y2: 400 }
 const text: Annotation = { id: 't', type: 'text', color: '#ffffff', size: 40, x: 700, y: 50, text: '站这里' }
 
+describe('crop', () => {
+  it('clamps the crop to the image and drops no-op crops', () => {
+    expect(sanitizeCrop({ x: 10.4, y: 20, w: 500, h: 300 }, 1920, 1080)).toEqual({ x: 10, y: 20, w: 500, h: 300 })
+    expect(sanitizeCrop({ x: -50, y: 900, w: 4000, h: 400 }, 1920, 1080)).toEqual({ x: 0, y: 900, w: 1920, h: 180 })
+    expect(sanitizeCrop({ x: 0, y: 0, w: 1920, h: 1080 }, 1920, 1080)).toBeNull()
+    expect(sanitizeCrop({ x: 0, y: 0, w: 5, h: 500 }, 1920, 1080)).toBeNull()
+    expect(sanitizeCrop({ x: 'a', y: 0, w: 5, h: 5 }, 1920, 1080)).toBeNull()
+    expect(sanitizeCrop(undefined, 1920, 1080)).toBeNull()
+  })
+})
+
 describe('annotations', () => {
   it('scales stroke and text sizes with the image', () => {
-    expect(strokeSize(2, 1920, 1080)).toBeCloseTo(12.5, 1)
-    expect(strokeSize(2, 960, 540)).toBeCloseTo(6.2, 1)
-    expect(strokeSize(1, 100, 100)).toBe(1.5)
+    expect(strokeSize(2, 1920, 1080)).toBeCloseTo(6.2, 1)
+    expect(strokeSize(2, 960, 540)).toBeCloseTo(3.1, 1)
+    expect(strokeSize(1, 100, 100)).toBe(1)
     expect(textSize(3, 1920, 1080)).toBe(96)
     expect(levelOf({ ...pen, size: strokeSize(3, 1920, 1080) }, 1920, 1080)).toBe(3)
     expect(levelOf({ ...text, size: textSize(1, 1920, 1080) }, 1920, 1080)).toBe(1)

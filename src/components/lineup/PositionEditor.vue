@@ -10,11 +10,11 @@ import { usePointerDrag } from '@/composables/usePointerDrag'
 import { useRehearsal } from '@/composables/useRehearsal'
 import { boundsOf, mapMetric, roundPos } from '@/lib/geometry'
 import { findNearestGroup, groupByPosition, posKey, type MarkerGroup } from '@/lib/positions'
-import { buildRoute, formatDuration } from '@/lib/rehearsal'
+import { newRouteId, routeName } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import { MARKER_PX, usePrefs } from '@/stores/prefs'
 import { useUi } from '@/stores/ui'
-import { POS_MAX, type Landing, type Lineup, type LineupPath, type Position } from '@/types'
+import { POS_MAX, type Landing, type Lineup, type PathRoute, type Position } from '@/types'
 import Icon from '@/components/common/Icon.vue'
 import MapPicker from '@/components/common/MapPicker.vue'
 import LandingCountdown from '@/components/map/LandingCountdown.vue'
@@ -28,6 +28,7 @@ import RehearsalDot from '@/components/map/RehearsalDot.vue'
 import RehearsalTimers from '@/components/map/RehearsalTimers.vue'
 import DelayInput from './DelayInput.vue'
 import PathEditorPanel from './PathEditorPanel.vue'
+import RouteChips from './RouteChips.vue'
 
 /**
  * 详情页的位置编辑（位置、落点参照、路径追踪、现场演练都在这张地图上）：
@@ -36,8 +37,9 @@ import PathEditorPanel from './PathEditorPanel.vue'
  * - 当前 Lineup 位于多个 Lineup 的位置（黑点）时，从黑点上按住拖动即可把它单独拖出来；
  * - 也可以双击地图任意处直接移动过去；
  * - 落点：打开「落点参照」后拖动地图上的落点图案，右侧填写落点时间；
- * - 路径：点击地图上的路径或「新增路径」进入路径编辑（编辑面板停靠在地图左侧）；
- * - 有路径时可以「现场演练」。
+ * - 路径：可以有多个路径版本，点击版本或地图上的路径进入路径编辑（编辑面板停靠在地图左侧），
+ *   「新增版本」画一个新的版本；地图上显示最近编辑 / 选择的版本；
+ * - 有路径时可以「现场演练」，演练时可以选择路径版本。
  * 修改都只是暂存在表单里，点详情页右上角「保存」后才写入。
  */
 const props = defineProps<{
@@ -51,7 +53,7 @@ const emit = defineEmits<{ detail: [id: string] }>()
 const mapId = defineModel<string>('mapId', { required: true })
 const pos = defineModel<Position>('pos', { required: true })
 const landing = defineModel<Landing | null>('landing', { required: true })
-const paths = defineModel<LineupPath[]>('paths', { required: true })
+const routes = defineModel<PathRoute[]>('routes', { required: true })
 
 const store = useLineups()
 const ui = useUi()
@@ -65,7 +67,10 @@ const map = computed(() => MAP_BY_ID.get(mapId.value) ?? MAPS[0]!)
 const widthMeters = computed(() => mapWidthMeters(map.value.id))
 const metric = computed(() => mapMetric(widthMeters.value, canvas.value?.aspect ?? 1))
 const spec = computed(() => landingSpec(props.agentId))
-const routeTime = computed(() => buildRoute(paths.value, metric.value).duration)
+/** 地图上显示的路径版本 */
+const routeIndex = ref(0)
+const shownIndex = computed(() => Math.max(0, Math.min(routeIndex.value, routes.value.length - 1)))
+const shownPaths = computed(() => routes.value[shownIndex.value]?.paths ?? [])
 
 /** normal：调整位置 / 落点；paths：编辑路径；rehearsal：现场演练 */
 const mode = ref<'normal' | 'paths' | 'rehearsal'>('normal')
@@ -91,7 +96,7 @@ const mapCounts = computed(() => {
 /** 落点和路径是画在这张地图上的：切换地图时一起清除（「撤销修改」可以恢复） */
 async function changeMap(id: string) {
   if (id === mapId.value || mode.value !== 'normal') return
-  if (landing.value || paths.value.length) {
+  if (landing.value || routes.value.length) {
     const ok = await ui.confirm({
       title: '切换地图？',
       message: '落点和路径是画在当前地图上的，切换后会被清除。\n需要恢复时，点右上角「撤销修改」。',
@@ -99,7 +104,7 @@ async function changeMap(id: string) {
     })
     if (!ok) return
     landing.value = null
-    paths.value = []
+    routes.value = []
   }
   mapId.value = id
 }
@@ -242,10 +247,16 @@ function revealMap() {
   frame.value?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 }
 
-function enterPathMode(selectId: string | null = null) {
+/** 正在编辑的路径版本（等于版本数时表示新增版本） */
+let editingRoute = 0
+
+/** 编辑第 index 个路径版本；index 为 null 时新增一个版本 */
+function enterPathMode(index: number | null, selectId: string | null = null) {
   if (mode.value !== 'normal') return
   pop.close()
-  editor.start(paths.value, selectId)
+  editingRoute = index ?? routes.value.length
+  const r = routes.value[editingRoute]
+  editor.start(r?.paths ?? [], selectId, { name: r?.name, index: editingRoute })
   mode.value = 'paths'
   revealMap()
 }
@@ -261,17 +272,21 @@ async function finishPaths() {
     ui.toast(error, { kind: 'error' })
     return
   }
-  if (!editor.paths.length) {
-    const ok = await ui.confirm({
-      title: '删除全部路径？',
-      message: '这个 Lineup 将不再有路径追踪（保存后生效）。',
-      confirmText: '删除',
-      danger: true,
-    })
+  const list = [...routes.value]
+  const i = editingRoute
+  if (editor.paths.length) {
+    const route = { id: list[i]?.id ?? newRouteId(), name: editor.name, paths: editor.result() }
+    list.splice(i, i < list.length ? 1 : 0, route)
+    routeIndex.value = i
+  } else if (i < list.length) {
+    // 删除了这个版本的全部路径：删除这个版本
+    const ok = await ui.confirm({ title: `删除「${editor.title}」？`, confirmText: '删除', danger: true })
     if (!ok) return
+    list.splice(i, 1)
+    routeIndex.value = 0
   }
   const changed = editor.dirty
-  paths.value = editor.result()
+  routes.value = list
   showPaths.value = true
   leavePathMode()
   if (changed) ui.toast('路径已更新，点右上角「保存」后生效', { kind: 'info' })
@@ -294,13 +309,22 @@ async function exitPaths() {
 
 useLayer(() => mode.value === 'paths', exitPaths)
 
+async function removeRoute(i: number) {
+  const r = routes.value[i]
+  if (!r || mode.value !== 'normal') return
+  const ok = await ui.confirm({ title: `删除「${routeName(r, i)}」？`, confirmText: '删除', danger: true })
+  if (!ok) return
+  routes.value = routes.value.filter((x) => x.id !== r.id)
+  if (routeIndex.value > i) routeIndex.value--
+}
+
 /** 单击地图空白处：关闭预览窗口；点在路径上时进入路径编辑并选中它 */
 function onBackgroundClick(e: { clientX: number; clientY: number }) {
   pop.close()
-  if (mode.value !== 'normal' || !showPaths.value || !paths.value.length || !canvas.value) return
+  if (mode.value !== 'normal' || !showPaths.value || !shownPaths.value.length || !canvas.value) return
   const { pos: p } = canvas.value.clientToPos(e.clientX, e.clientY)
-  const hit = pickPathAt(paths.value, p, canvas.value.pxPerUnit())
-  if (hit) enterPathMode(hit)
+  const hit = pickPathAt(shownPaths.value, p, canvas.value.pxPerUnit())
+  if (hit) enterPathMode(shownIndex.value, hit)
 }
 
 type DrawPayload = { pos: Position; clientX: number; clientY: number }
@@ -316,17 +340,24 @@ const rehearsalLandingVisible = computed(() => {
   return !rehearsal.landingState || rehearsal.landingState.phase !== 'flight'
 })
 
-function startRehearsal() {
-  if (!paths.value.length || !canvas.value) return
+/** 演练的路径版本 */
+const rehearsalRoute = ref(0)
+const rehearsalPaths = computed(() => routes.value[rehearsalRoute.value]?.paths ?? [])
+
+/** 现场演练：index 为演练的路径版本（默认为地图上显示的版本） */
+function startRehearsal(index = shownIndex.value) {
+  if (!routes.value.length || !canvas.value) return
   if (mode.value === 'paths') return
+  rehearsalRoute.value = routes.value[index] ? index : 0
+  const paths = rehearsalPaths.value
   if (mode.value !== 'rehearsal') viewBeforeRehearsal = canvas.value.getViewState()
   pop.close()
   mode.value = 'rehearsal'
   revealMap()
-  const points: Position[] = [pos.value, ...paths.value.flatMap((p) => p.points), ...(landing.value ? [landing.value] : [])]
+  const points: Position[] = [pos.value, ...paths.flatMap((p) => p.points), ...(landing.value ? [landing.value] : [])]
   const moved = canvas.value.fitBounds(boundsOf(points)!, 50)
   rehearsal.start({
-    paths: paths.value,
+    paths,
     landing: landing.value,
     agentId: props.agentId,
     metric: metric.value,
@@ -424,14 +455,13 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
         </div>
       </div>
 
-      <div class="field tool" :class="{ disabled: mode !== 'normal' }">
+      <div class="field tool route-tool" :class="{ disabled: mode !== 'normal' }">
         <span class="field-label">
           <Icon name="route" :size="13" />
           路径追踪
-          <span v-if="paths.length" class="tool-meta tabular">{{ paths.length }} 条 · 约 {{ formatDuration(routeTime) }}</span>
         </span>
         <div class="tool-row">
-          <template v-if="paths.length">
+          <template v-if="routes.length">
             <label class="inline-switch">
               <button
                 type="button"
@@ -444,12 +474,16 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
               />
               显示路径
             </label>
-            <button type="button" class="btn btn-outline" :disabled="mode !== 'normal'" @click="enterPathMode()">
-              <Icon name="plus" :size="15" />
-              新增路径
-            </button>
+            <RouteChips
+              :routes="routes"
+              :active="shownIndex"
+              :metric="metric"
+              @edit="(i) => enterPathMode(i)"
+              @add="enterPathMode(null)"
+              @remove="removeRoute"
+            />
           </template>
-          <button v-else type="button" class="btn btn-outline" :disabled="mode !== 'normal'" @click="enterPathMode()">
+          <button v-else type="button" class="btn btn-outline" :disabled="mode !== 'normal'" @click="enterPathMode(null)">
             <Icon name="plus" :size="15" />
             增加路径追踪
           </button>
@@ -457,12 +491,12 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
       </div>
 
       <button
-        v-if="paths.length"
+        v-if="routes.length"
         type="button"
         class="btn rehearse-btn"
         :class="{ on: mode === 'rehearsal' }"
         :disabled="mode === 'paths'"
-        @click="startRehearsal"
+        @click="startRehearsal()"
       >
         <Icon name="play" :size="14" />
         现场演练
@@ -476,10 +510,8 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
         点击路径可修改它的信息，<b>右键 / 空格 + 拖动</b>平移地图，按住 <span class="kbd">Ctrl</span> 滚动缩放。
       </span>
       <span v-else>
-        拖动<b class="gold">黄色圆点</b>调整位置；拖到其他圆点附近松开可<b>合并到同一位置</b>；
-        从黑点上按住拖动可把当前 Lineup 单独拖出。也可以<b>双击</b>地图直接移动。
-        <template v-if="landing">拖动<b class="molly">{{ spec ? '红色圆形' : '落点标记' }}</b>调整落点。</template>
-        <template v-if="paths.length && showPaths">点击<b class="path">蓝色路径</b>可编辑路径。</template>
+        拖动<b class="gold">黄色圆点</b>以编辑，或者<b>双击</b>地图移动。
+        <template v-if="shownPaths.length && showPaths">点击<b class="path">蓝色路径</b>可编辑路径。</template>
       </span>
     </p>
 
@@ -523,7 +555,7 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
                 :beam="rehearsal.landingState?.phase === 'ult'"
                 :dim="rehearsal.landingState?.phase === 'done'"
               />
-              <PathLayer :paths="paths" :px="px" :size="size" />
+              <PathLayer :paths="rehearsalPaths" :px="px" :size="size" />
               <MapMarker variant="active" :style="at(pos)" :size="markerPx + 2" :label="lineup.name" />
               <LandingCountdown
                 v-if="rehearsal.landing && rehearsal.landingState && rehearsal.spec"
@@ -558,7 +590,7 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
                 :px="px"
                 :size="size"
               />
-              <PathLayer v-else-if="showPaths && paths.length" :paths="paths" show-numbers :px="px" :size="size" />
+              <PathLayer v-else-if="showPaths && shownPaths.length" :paths="shownPaths" show-numbers :px="px" :size="size" />
 
               <div class="markers" :class="{ dim: mode === 'paths' }">
                 <template v-for="g in groups" :key="g.key">
@@ -629,6 +661,9 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
               <RehearsalControls
                 class="rehearsal-controls"
                 :finished="rehearsal.finished"
+                :routes="routes"
+                :route="rehearsalRoute"
+                @update:route="(i) => startRehearsal(i)"
                 @restart="rehearsal.restart()"
                 @exit="endRehearsal()"
               />
@@ -706,9 +741,13 @@ const mapPadding = { top: 20, right: 64, bottom: 20, left: 20 }
   align-items: center;
   gap: 5px;
 }
-.tool-meta {
-  color: #7cb2ff;
-  font-weight: 600;
+.route-tool {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.route-tool .tool-row {
+  flex-wrap: wrap;
+  padding: 2px 0;
 }
 .tool-row {
   display: flex;

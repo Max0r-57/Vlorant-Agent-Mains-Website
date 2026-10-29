@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { formatShort } from '@/lib/format'
+import { hasPaths } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import type { Lineup } from '@/types'
 import Icon from '@/components/common/Icon.vue'
@@ -7,21 +8,29 @@ import TypeBadge from '@/components/common/TypeBadge.vue'
 import LineupThumb from './LineupThumb.vue'
 
 /**
- * 导览栏搜索结果卡片：点击卡片在地图上定位，点「详情」进入详情页；
- * 有路径时可以「现场演练」；右上角的小方框隐藏这个 Lineup。
+ * 导览栏搜索结果卡片：点击卡片选中 / 取消选中（选中时在地图上定位），点「详情」进入详情页；
+ * 有路径时可以「现场演练」；右上角的小方框隐藏这个 Lineup（已隐藏时为取消隐藏）。
  */
-defineProps<{ lineup: Lineup; active?: boolean }>()
-const emit = defineEmits<{ focus: []; detail: []; hover: [on: boolean]; rehearse: []; hide: [] }>()
+defineProps<{ lineup: Lineup; selected?: boolean; hidden?: boolean }>()
+const emit = defineEmits<{
+  focus: []
+  detail: []
+  hover: [on: boolean]
+  rehearse: []
+  hide: []
+  unhide: []
+}>()
 const store = useLineups()
 </script>
 
 <template>
   <article
     class="result"
-    :class="{ active }"
+    :class="{ active: selected, muted: hidden || lineup.invalid }"
     tabindex="0"
     role="button"
-    :aria-label="`在地图上定位：${lineup.name}`"
+    :aria-pressed="!!selected"
+    :aria-label="lineup.name"
     @click="emit('focus')"
     @keydown.enter.self="emit('focus')"
     @keydown.space.self.prevent="emit('focus')"
@@ -40,10 +49,15 @@ const store = useLineups()
         <span class="date tabular">{{ formatShort(lineup.createdAt) }}</span>
         <span v-if="lineup.landing" class="flag" title="有落点参照"><Icon name="target" :size="12" /></span>
       </div>
+      <div v-if="lineup.bug || hidden" class="tags">
+        <span v-if="lineup.bug" class="tag bug">BUG</span>
+        <span v-if="lineup.invalid" class="tag invalid">失效</span>
+        <span v-if="hidden" class="tag">已隐藏</span>
+      </div>
     </div>
     <div class="actions">
       <button
-        v-if="lineup.paths.length"
+        v-if="hasPaths(lineup)"
         type="button"
         class="btn btn-sm btn-outline rehearse"
         title="现场演练"
@@ -58,6 +72,18 @@ const store = useLineups()
       </button>
     </div>
     <button
+      v-if="hidden"
+      type="button"
+      class="hide unhide"
+      title="取消隐藏"
+      aria-label="取消隐藏"
+      @click.stop="emit('unhide')"
+      @keydown.stop
+    >
+      <Icon name="plus" :size="11" :stroke="2.6" />
+    </button>
+    <button
+      v-else
       type="button"
       class="hide"
       title="隐藏该Lineup"
@@ -94,8 +120,13 @@ const store = useLineups()
   border-color: var(--cyan-dim);
 }
 .result.active {
-  border-color: var(--cyan-dim);
-  background: linear-gradient(90deg, rgb(120 251 231 / 0.1), transparent 70%), var(--surface-2);
+  border-color: var(--cyan);
+  background: linear-gradient(90deg, rgb(120 251 231 / 0.14), transparent 70%), var(--surface-2);
+  box-shadow: inset 0 0 0 1px rgb(120 251 231 / 0.5);
+}
+.result.muted .thumb-wrap,
+.result.muted .name {
+  opacity: 0.6;
 }
 .thumb-wrap {
   position: relative;
@@ -156,6 +187,27 @@ const store = useLineups()
   color: var(--text-3);
   font-size: 11px;
 }
+.tags {
+  display: flex;
+  gap: 4px;
+}
+.tag {
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+}
+.tag.bug {
+  border-color: rgb(255 176 32 / 0.55);
+  color: #ffb020;
+}
+.tag.invalid {
+  border-color: rgb(255 92 92 / 0.55);
+  color: var(--danger);
+}
 .flag {
   display: inline-flex;
   flex: none;
@@ -200,6 +252,12 @@ const store = useLineups()
     color 0.15s var(--ease),
     border-color 0.15s var(--ease),
     background-color 0.15s var(--ease);
+}
+.unhide:hover,
+.unhide:focus-visible {
+  border-color: var(--cyan-dim) !important;
+  background: var(--cyan-soft) !important;
+  color: var(--cyan) !important;
 }
 .hide:hover,
 .hide:focus-visible {

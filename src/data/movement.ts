@@ -4,12 +4,12 @@
  * - 持刀跑 6.75、持战神 / 奥丁跑 5.13、静步 3.8（任何武器）
  * - 其余武器的奔跑速度取自官方 Wiki：https://wiki.playvalorant.com/en-us/Weapons
  *
- * 数组顺序就是下拉菜单里的顺序（同类武器按商店价格排列）。
+ * 数组顺序就是下拉菜单里的顺序（同类武器按商店价格排列）；持武器跑只显示武器名称，如「刀」「狂徒」。
  * 游戏更新调整了速度时，直接改这里的数字即可。
  */
 export interface MoveMode {
   id: string
-  /** 显示名称，如「持刀跑」 */
+  /** 显示名称：持武器跑为武器名称（如「刀」），静步为「静步」 */
   label: string
   /** 移动速度（米 / 秒） */
   speed: number
@@ -21,7 +21,7 @@ export interface MoveModeGroup {
 }
 
 function run(id: string, weapon: string, speed: number): MoveMode {
-  return { id, label: `持${weapon}跑`, speed }
+  return { id, label: weapon, speed }
 }
 
 export const MOVE_MODE_GROUPS: MoveModeGroup[] = [

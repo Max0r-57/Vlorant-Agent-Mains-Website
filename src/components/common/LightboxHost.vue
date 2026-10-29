@@ -5,14 +5,16 @@ import { formatDuration } from '@/lib/format'
 import { getImageUrl, getMediaInfo, peekImageUrl, peekMediaInfo, type MediaInfo } from '@/lib/imageCache'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
-import type { Annotation, ImageSource } from '@/types'
+import type { Annotation, CropRect, ImageSource } from '@/types'
 import AnnotationLayer from '@/components/media/AnnotationLayer.vue'
 import ImageAnnotator from '@/components/media/ImageAnnotator.vue'
 import Icon from './Icon.vue'
 
 /**
- * 图片 / 视频查看器：左右切换；图片可以滚轮 / 双指缩放、拖动平移、双击放大，
- * 并且可以「编辑」添加标注；视频用浏览器自带的播放控件播放。
+ * 图片 / 视频查看器：图片铺满整个页面，左右两侧是半透明的切换按钮；
+ * 看到一个 Lineup 的最后一张时，「下一个」按钮变色，点击切换到列表里的下一个 Lineup（第一张时「上一个」同理）。
+ * 图片可以滚轮 / 双指缩放、拖动平移、双击放大，并且可以「编辑」添加标注、裁剪；
+ * 视频用浏览器自带的播放控件播放。
  */
 const ui = useUi()
 const store = useLineups()
@@ -21,6 +23,10 @@ const open = computed(() => !!state.value)
 /** 本地副本：给草稿图片保存标注后，替换成新的来源 */
 const sources = shallowRef<ImageSource[]>([])
 const index = ref(0)
+const title = ref('')
+/** 连续查看时，当前是列表里的第几个 Lineup */
+const groupIndex = ref(0)
+const sequence = computed(() => state.value?.sequence ?? null)
 
 interface View {
   info: MediaInfo | null
@@ -43,6 +49,7 @@ const editTarget = shallowRef<{
   width: number
   height: number
   annotations: readonly Annotation[]
+  crop: CropRect | null
 } | null>(null)
 const editing = computed(() => !!editTarget.value)
 
@@ -72,6 +79,7 @@ function infoOfUrl(src: Extract<ImageSource, { kind: 'url' }>): MediaInfo {
     height: src.height ?? 0,
     duration: 0,
     annotations: src.annotations ?? [],
+    crop: src.crop ?? null,
   }
 }
 
@@ -122,6 +130,8 @@ watch(
     }
     sources.value = s.sources
     index.value = s.index
+    title.value = s.title ?? ''
+    groupIndex.value = s.sequence?.index ?? 0
     void loadStrip(s.sources)
   },
   { immediate: true },
@@ -146,8 +156,29 @@ async function loadCurrent() {
 
 watch([sources, index], () => void loadCurrent(), { immediate: true })
 
+/** 最后一张（第一张）时，「下一个」（「上一个」）切换到相邻的 Lineup */
+const nextIsGroup = computed(
+  () => index.value === total.value - 1 && !!sequence.value && groupIndex.value < sequence.value.groups.length - 1,
+)
+const prevIsGroup = computed(() => index.value === 0 && !!sequence.value && groupIndex.value > 0)
+const canNext = computed(() => total.value > 1 || nextIsGroup.value)
+const canPrev = computed(() => total.value > 1 || prevIsGroup.value)
+
+function switchGroup(i: number, at: 'first' | 'last') {
+  const g = sequence.value?.groups[i]
+  if (!g?.sources.length) return
+  groupIndex.value = i
+  sources.value = g.sources
+  title.value = g.title
+  index.value = at === 'first' ? 0 : g.sources.length - 1
+  void loadStrip(g.sources)
+}
+
 function go(delta: number) {
-  if (total.value < 2 || editing.value) return
+  if (editing.value) return
+  if (delta > 0 && nextIsGroup.value) return switchGroup(groupIndex.value + 1, 'first')
+  if (delta < 0 && prevIsGroup.value) return switchGroup(groupIndex.value - 1, 'last')
+  if (total.value < 2) return
   index.value = (index.value + delta + total.value) % total.value
 }
 
@@ -168,19 +199,38 @@ watch(open, (v) => {
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
-// ---- 显示尺寸：按原图比例放进舞台（不放大小图），标注图层和图片使用同一个框 ----
+// ---- 显示尺寸：按图片（裁剪后）的比例铺满整个舞台，标注图层和图片使用同一个框 ----
 const stageSize = ref({ w: 0, h: 0 })
-const mediaSize = computed(() => {
+/** 原图尺寸 */
+const fullSize = computed(() => {
   const info = view.value.info
   if (info && info.width > 0 && info.height > 0) return { w: info.width, h: info.height }
   return natural.value
 })
+/** 裁剪范围：只在显示原图时使用（缩略图本身已经裁剪过） */
+const crop = computed(() => (!isVideo.value && view.value.full ? (view.value.info?.crop ?? null) : null))
+/** 显示出来的部分的尺寸（裁剪后） */
+const mediaSize = computed(() => (crop.value ? { w: crop.value.w, h: crop.value.h } : fullSize.value))
 const display = computed(() => {
   const m = mediaSize.value
   const s = stageSize.value
   if (!m || !s.w || !s.h) return null
-  const k = Math.min(1, s.w / m.w, s.h / m.h)
+  const k = Math.min(s.w / m.w, s.h / m.h)
   return { w: Math.max(1, Math.round(m.w * k)), h: Math.max(1, Math.round(m.h * k)) }
+})
+/** 裁剪时：整张原图放大后的尺寸和偏移，图片框只露出裁剪的部分 */
+const contentStyle = computed(() => {
+  const c = crop.value
+  const f = fullSize.value
+  const d = display.value
+  if (!c || !f || !d) return undefined
+  const k = d.w / c.w
+  return {
+    width: `${f.w * k}px`,
+    height: `${f.h * k}px`,
+    left: `${-c.x * k}px`,
+    top: `${-c.y * k}px`,
+  }
 })
 
 function measureStage() {
@@ -210,31 +260,37 @@ function onImageLoad(e: Event) {
 // ---- 标注编辑 ----
 const canEdit = computed(() => {
   const src = sources.value[index.value]
-  if (!src || isVideo.value || !view.value.full || !mediaSize.value) return false
+  if (!src || isVideo.value || !view.value.full || !fullSize.value) return false
   return src.kind === 'stored' || !!state.value?.annotateDraft
 })
 
 function startEdit() {
-  const size = mediaSize.value
+  const size = fullSize.value
   if (!canEdit.value || !view.value.full || !size) return
   resetZoom()
-  editTarget.value = { src: view.value.full, width: size.w, height: size.h, annotations: annotations.value }
+  editTarget.value = {
+    src: view.value.full,
+    width: size.w,
+    height: size.h,
+    annotations: annotations.value,
+    crop: view.value.info?.crop ?? null,
+  }
 }
 
-async function saveAnnotations(list: Annotation[]) {
+async function saveAnnotations(list: Annotation[], cropRect: CropRect | null) {
   const i = index.value
   const src = sources.value[i]
   if (!src) throw new Error('图片不存在')
   if (src.kind === 'stored') {
-    await store.annotateImage(src.id, list)
+    await store.annotateImage(src.id, list, cropRect)
   } else {
     const annotate = state.value?.annotateDraft
     if (!annotate) throw new Error('这张图片不能编辑')
-    const next = await annotate(i, list)
+    const next = await annotate(i, list, cropRect)
     if (next) sources.value = sources.value.map((s, j) => (j === i ? next : s))
   }
   showAnnotations.value = true
-  ui.toast(list.length ? '已保存标注' : '已清除标注')
+  ui.toast('已保存')
   await loadCurrent()
   // 更新底部缩略图条里这一张的缩略图
   const fresh = await loadView(sources.value[i]!)
@@ -444,44 +500,10 @@ watch(
   <Teleport to="body">
     <Transition name="lb">
       <div v-if="state" class="lightbox" role="dialog" aria-modal="true" aria-label="查看图片和视频">
-        <header class="bar">
-          <span class="title ellipsis">{{ state.title }}</span>
-          <span v-if="total > 1" class="counter tabular">{{ index + 1 }} / {{ total }}</span>
-          <span v-if="scale > 1" class="zoom tabular">{{ Math.round(scale * 100) }}%</span>
-          <span v-if="isVideo && view.info?.duration" class="zoom tabular">
-            视频 · {{ formatDuration(view.info.duration) }}
-          </span>
-          <button
-            v-if="!isVideo && annotations.length"
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :aria-pressed="showAnnotations"
-            :title="showAnnotations ? '隐藏标注，查看原图' : '显示标注'"
-            @click="showAnnotations = !showAnnotations"
-          >
-            <Icon :name="showAnnotations ? 'eye' : 'eyeOff'" :size="15" />
-            标注
-          </button>
-          <button
-            v-if="!isVideo"
-            type="button"
-            class="btn btn-outline btn-sm edit-btn"
-            :disabled="!canEdit"
-            title="在图片上圈画、放置圆圈、箭头或文本框"
-            @click="startEdit"
-          >
-            <Icon name="edit" :size="14" />
-            编辑
-          </button>
-          <button type="button" class="btn btn-ghost btn-icon" aria-label="关闭" @click="ui.closeLightbox()">
-            <Icon name="x" :size="22" />
-          </button>
-        </header>
-
         <div
           ref="stage"
           class="stage"
-          :class="{ zoomed: scale > 1, 'is-video': isVideo }"
+          :class="{ zoomed: scale > 1, 'is-video': isVideo, 'has-strip': total > 1 }"
           @wheel="onWheel"
           @dblclick="onDblClick"
           @pointerdown="onPointerDown"
@@ -518,28 +540,77 @@ watch(
             v-else-if="view.full || view.poster"
             ref="frameEl"
             class="frame"
-            :class="{ animating, sizing: !display }"
+            :class="{ animating, sizing: !display, cropped: !!contentStyle }"
             :style="{
               width: display ? `${display.w}px` : undefined,
               height: display ? `${display.h}px` : undefined,
               transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
             }"
           >
-            <img :src="(view.full ?? view.poster)!" alt="" draggable="false" @load="onImageLoad" />
-            <AnnotationLayer
-              v-if="showAnnotations && annotations.length && mediaSize"
-              :annotations="annotations"
-              :width="mediaSize.w"
-              :height="mediaSize.h"
-            />
+            <div class="content" :style="contentStyle">
+              <img :src="(view.full ?? view.poster)!" alt="" draggable="false" @load="onImageLoad" />
+              <AnnotationLayer
+                v-if="view.full && showAnnotations && annotations.length && fullSize"
+                :annotations="annotations"
+                :width="fullSize.w"
+                :height="fullSize.h"
+              />
+            </div>
           </div>
         </div>
 
-        <button v-if="total > 1" type="button" class="nav prev" aria-label="上一个" @click="go(-1)">
-          <Icon name="chevronLeft" :size="28" />
+        <header class="bar">
+          <span class="title ellipsis">{{ title }}</span>
+          <span v-if="total > 1" class="counter tabular">{{ index + 1 }} / {{ total }}</span>
+          <span v-if="scale > 1" class="zoom tabular">{{ Math.round(scale * 100) }}%</span>
+          <span v-if="isVideo && view.info?.duration" class="zoom tabular">
+            视频 · {{ formatDuration(view.info.duration) }}
+          </span>
+          <button
+            v-if="!isVideo && annotations.length"
+            type="button"
+            class="btn btn-ghost btn-sm bar-btn"
+            :aria-pressed="showAnnotations"
+            :title="showAnnotations ? '隐藏标注，查看原图' : '显示标注'"
+            @click="showAnnotations = !showAnnotations"
+          >
+            <Icon :name="showAnnotations ? 'eye' : 'eyeOff'" :size="15" />
+            标注
+          </button>
+          <button
+            v-if="!isVideo"
+            type="button"
+            class="btn btn-outline btn-sm edit-btn bar-btn"
+            :disabled="!canEdit"
+            @click="startEdit"
+          >
+            <Icon name="edit" :size="14" />
+            编辑
+          </button>
+          <button type="button" class="btn btn-ghost btn-icon bar-btn close" aria-label="关闭" @click="ui.closeLightbox()">
+            <Icon name="x" :size="22" />
+          </button>
+        </header>
+
+        <button
+          type="button"
+          class="nav prev"
+          :class="{ group: prevIsGroup }"
+          :disabled="!canPrev"
+          :aria-label="prevIsGroup ? '上一个 Lineup' : '上一个'"
+          @click="go(-1)"
+        >
+          <Icon name="chevronLeft" :size="30" />
         </button>
-        <button v-if="total > 1" type="button" class="nav next" aria-label="下一个" @click="go(1)">
-          <Icon name="chevronRight" :size="28" />
+        <button
+          type="button"
+          class="nav next"
+          :class="{ group: nextIsGroup }"
+          :disabled="!canNext"
+          :aria-label="nextIsGroup ? '下一个 Lineup' : '下一个'"
+          @click="go(1)"
+        >
+          <Icon name="chevronRight" :size="30" />
         </button>
 
         <footer v-if="total > 1" class="strip">
@@ -556,16 +627,6 @@ watch(
             <span v-if="t.video" class="strip-play"><Icon name="play" :size="12" :stroke="0" /></span>
           </button>
         </footer>
-        <p v-if="isVideo" class="hint">
-          <span class="kbd">←</span> <span class="kbd">→</span> 切换 · <span class="kbd">Esc</span> 关闭
-        </p>
-        <template v-else>
-          <p class="hint desktop">
-            滚轮缩放 · 双击放大 · <span class="kbd">←</span> <span class="kbd">→</span> 切换 · 点「编辑」添加标注 ·
-            <span class="kbd">Esc</span> 关闭
-          </p>
-          <p class="hint touch">双指缩放 · 双击放大 / 还原 · 放大后单指拖动 · 左右滑动切换</p>
-        </template>
 
         <ImageAnnotator
           v-if="editTarget"
@@ -573,7 +634,8 @@ watch(
           :width="editTarget.width"
           :height="editTarget.height"
           :annotations="editTarget.annotations"
-          :title="state.title"
+          :crop="editTarget.crop"
+          :title="title"
           :save="saveAnnotations"
           @close="editTarget = null"
         />
@@ -587,40 +649,52 @@ watch(
   position: fixed;
   inset: 0;
   z-index: var(--z-lightbox);
-  display: flex;
-  flex-direction: column;
-  background: rgb(4 7 10 / 0.94);
+  background: rgb(4 7 10 / 0.96);
   backdrop-filter: blur(6px);
 }
+/* 顶栏浮在图片上：只有按钮可以点击，其余部分点击穿透到图片 / 空白处 */
 .bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px 10px 20px;
+  padding: 10px 12px 22px 20px;
+  background: linear-gradient(rgb(4 7 10 / 0.82), rgb(4 7 10 / 0));
+  pointer-events: none;
+}
+.bar-btn {
+  pointer-events: auto;
 }
 .title {
   flex: 1;
   font-weight: 700;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
 }
 .counter,
 .zoom {
   color: var(--text-2);
   font-size: 13px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
 }
 .edit-btn {
   border-color: var(--cyan-dim);
+  background: rgb(4 7 10 / 0.5);
   color: var(--cyan);
 }
+.close {
+  background: rgb(4 7 10 / 0.35);
+}
 .stage {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex: 1;
   align-items: center;
   justify-content: center;
-  min-height: 0;
   overflow: hidden;
-  /* 图片按这个区域（去掉内边距）等比缩小，上下左右都留一点空隙，不会超出窗口 */
-  padding: 12px 64px;
   cursor: zoom-in;
   touch-action: none;
 }
@@ -629,16 +703,22 @@ watch(
 }
 .stage.is-video {
   cursor: default;
+  /* 视频的播放控件不能被顶栏、左右切换按钮和缩略图条挡住 */
+  padding: 56px 72px 12px;
+}
+.stage.is-video.has-strip {
+  padding-bottom: 76px;
 }
 .frame {
   position: relative;
   flex: none;
   max-width: 100%;
   max-height: 100%;
-  border-radius: var(--r-sm);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
   transform-origin: center;
   user-select: none;
+}
+.frame.cropped {
+  overflow: hidden;
 }
 .frame.animating {
   transition: transform 0.2s var(--ease);
@@ -647,12 +727,16 @@ watch(
 .frame.sizing {
   visibility: hidden;
 }
+.content {
+  position: absolute;
+  inset: 0;
+}
+.content > img,
 .frame > img,
 .player {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: inherit;
   object-fit: contain;
   pointer-events: none;
 }
@@ -674,34 +758,59 @@ watch(
   text-align: center;
   transform: translate(-50%, -50%);
 }
+/* 左右两侧整条的半透明切换按钮 */
 .nav {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 64px;
-  margin-top: -32px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r);
-  background: rgb(18 27 34 / 0.8);
-  color: var(--text);
+  width: 72px;
+  padding: 0;
+  border: 0;
+  background: rgb(4 7 10 / 0.28);
+  color: rgb(255 255 255 / 0.75);
+  transition:
+    background-color 0.15s var(--ease),
+    color 0.15s var(--ease);
 }
-.nav:hover {
-  background: var(--surface-3);
+.nav:hover:not(:disabled) {
+  background: rgb(4 7 10 / 0.5);
+  color: #fff;
+}
+.nav:disabled {
+  color: rgb(255 255 255 / 0.18);
+  cursor: default;
+}
+/* 切换到相邻的 Lineup */
+.nav.group {
+  background: rgb(120 251 231 / 0.16);
+  color: var(--cyan);
+}
+.nav.group:hover {
+  background: rgb(120 251 231 / 0.3);
+  color: #fff;
 }
 .prev {
-  left: 12px;
+  left: 0;
 }
 .next {
-  right: 12px;
+  right: 0;
 }
 .strip {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 3;
   display: flex;
-  justify-content: center;
   gap: 8px;
-  padding: 12px;
+  max-width: calc(100% - 180px);
+  padding: 6px;
   overflow-x: auto;
+  border-radius: var(--r);
+  background: rgb(4 7 10 / 0.6);
+  transform: translateX(-50%);
 }
 .strip-item {
   position: relative;
@@ -741,24 +850,6 @@ watch(
   fill: currentColor;
   margin-left: 2px;
 }
-.hint {
-  padding: 0 12px 12px;
-  color: var(--text-3);
-  font-size: 12px;
-  text-align: center;
-}
-/* 触屏设备显示手势提示，电脑显示键盘 / 鼠标提示 */
-.hint.touch {
-  display: none;
-}
-@media (hover: none) and (pointer: coarse) {
-  .hint.desktop {
-    display: none;
-  }
-  .hint.touch {
-    display: block;
-  }
-}
 .lb-enter-active,
 .lb-leave-active {
   transition: opacity 0.18s var(--ease);
@@ -768,11 +859,15 @@ watch(
   opacity: 0;
 }
 @media (max-width: 640px) {
-  .stage {
-    padding: 8px;
-  }
   .nav {
-    display: none;
+    width: 40px;
+  }
+  .stage.is-video {
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+  .strip {
+    max-width: calc(100% - 96px);
   }
 }
 </style>

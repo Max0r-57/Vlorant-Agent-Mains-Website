@@ -12,6 +12,8 @@ export const useHomeFilters = defineStore('homeFilters', () => {
   const area = shallowRef<Position[] | null>(null)
   /** 在搜索结果里手动隐藏的 Lineup */
   const hiddenIds = ref<string[]>([])
+  /** 显示隐藏的 Lineup（手动隐藏和失效隐藏） */
+  const showHidden = ref(false)
 
   const active = computed(
     () =>
@@ -30,5 +32,5 @@ export const useHomeFilters = defineStore('homeFilters', () => {
     hiddenIds.value = []
   }
 
-  return { query, typeIds, time, area, hiddenIds, active, clear }
+  return { query, typeIds, time, area, hiddenIds, showHidden, active, clear }
 })

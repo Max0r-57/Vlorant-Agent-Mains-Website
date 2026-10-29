@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useLayer } from '@/composables/useLayer'
 import type { PathEditor } from '@/composables/usePathEditor'
 import { moveModeLabel, moveSpeed } from '@/data/movement'
 import { polylineLength, type MapMetric } from '@/lib/geometry'
-import { pathName } from '@/lib/paths'
+import { MAX_ROUTE_NAME } from '@/lib/paths'
 import { formatDuration } from '@/lib/rehearsal'
 import Icon from '@/components/common/Icon.vue'
 import MoveModePicker from './MoveModePicker.vue'
 
 /**
  * 路径编辑面板（首页放在导览栏位置，详情页停靠在地图左侧）：
- * 顶部是当前路径的名称（点击可改名），下面是行走方式和序号、「重画该路径」，
- * 然后是全部路径的列表，最下面是「完成路径编辑」和「退出路径编辑模式」。
+ * 顶部是路径版本的名称（点击可改名），下面是当前这段路径的行走方式和序号、「重画该路径」，
+ * 然后是这个版本全部路径的列表，最下面是「完成路径编辑」和「退出路径编辑模式」。
  */
 const props = withDefaults(
   defineProps<{
@@ -30,9 +30,6 @@ const ed = props.editor
 
 const isPending = computed(() => ed.selectedId === null)
 const index = computed(() => (isPending.value ? ed.pendingOrder - 1 : ed.selectedIndex))
-const title = computed(() =>
-  isPending.value ? pathName(ed.pending, ed.pendingOrder - 1) : pathName(ed.current!, ed.selectedIndex),
-)
 const mode = computed(() => (isPending.value ? ed.pending.mode : (ed.current?.mode ?? '')))
 const modeError = computed(() => ed.tried && !isPending.value && !mode.value)
 
@@ -55,27 +52,23 @@ const totals = computed(() => {
 })
 const current = computed(() => (isPending.value ? null : stats.value[ed.selectedIndex]))
 
-// ---------- 名称：点击标题编辑 ----------
+// ---------- 版本名称：点击标题编辑 ----------
 const editingTitle = ref(false)
 const titleDraft = ref('')
 const titleInput = ref<HTMLInputElement>()
 
 async function editTitle() {
-  titleDraft.value = title.value
+  titleDraft.value = ed.title
   editingTitle.value = true
   await nextTick()
   titleInput.value?.select()
 }
 function commitTitle() {
   if (!editingTitle.value) return
-  ed.setName(ed.selectedId, titleDraft.value)
+  ed.setName(titleDraft.value)
   editingTitle.value = false
 }
 useLayer(editingTitle, () => (editingTitle.value = false))
-watch(
-  () => ed.selectedId,
-  () => (editingTitle.value = false),
-)
 
 function setOrder(e: Event) {
   if (!ed.current) return
@@ -98,15 +91,19 @@ function setOrder(e: Event) {
           ref="titleInput"
           v-model="titleDraft"
           class="title-input"
-          maxlength="30"
-          aria-label="路径名称"
+          :maxlength="MAX_ROUTE_NAME"
+          aria-label="路径版本名称"
           @keydown.enter.prevent="commitTitle"
           @blur="commitTitle"
         />
-        <button v-else type="button" class="title" title="点击修改路径名称" @click="editTitle">
-          <span class="ellipsis">{{ title }}</span>
+        <button v-else type="button" class="title" title="修改版本名称" @click="editTitle">
+          <span class="ellipsis">{{ ed.title }}</span>
           <Icon name="pen" :size="15" class="title-pen" />
         </button>
+      </div>
+
+      <div class="seg-row">
+        <span class="seg">第 {{ index + 1 }} 段</span>
         <span v-if="isPending" class="tag">{{ ed.pending.insertAt !== null ? '待重画' : '待画' }}</span>
       </div>
 
@@ -170,10 +167,10 @@ function setOrder(e: Event) {
           <button type="button" class="item-main" @click="ed.select(p.id)">
             <span class="num tabular">{{ i + 1 }}</span>
             <span class="item-text">
-              <span class="item-name ellipsis">{{ pathName(p, i) }}</span>
-              <span class="item-meta">
-                {{ p.mode ? moveModeLabel(p.mode) : '未选择行走方式' }}
-                <template v-if="stats[i]?.time != null"> · {{ formatDuration(stats[i]!.time!) }}</template>
+              <span class="item-name ellipsis">{{ p.mode ? moveModeLabel(p.mode) : '未选择行走方式' }}</span>
+              <span class="item-meta tabular">
+                {{ stats[i]!.length.toFixed(1) }} 米
+                <template v-if="stats[i]!.time !== null"> · {{ formatDuration(stats[i]!.time!) }}</template>
               </span>
             </span>
           </button>
@@ -185,7 +182,7 @@ function setOrder(e: Event) {
           <button type="button" class="item-main" @click="ed.select(null)">
             <span class="num tabular">{{ ed.pendingOrder }}</span>
             <span class="item-text">
-              <span class="item-name ellipsis">{{ pathName(ed.pending, ed.pendingOrder - 1) }}</span>
+              <span class="item-name ellipsis">{{ ed.pending.mode ? moveModeLabel(ed.pending.mode) : '下一段' }}</span>
               <span class="item-meta">待画</span>
             </span>
           </button>
@@ -290,6 +287,17 @@ function setOrder(e: Event) {
   color: var(--text);
   box-shadow: 0 0 0 3px var(--cyan-soft);
   outline: none;
+}
+.seg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -4px;
+}
+.seg {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
 }
 .tag {
   flex: none;

@@ -40,6 +40,7 @@ export function toSource(img: EditableImage): ImageSource | null {
     width: img.draft?.width,
     height: img.draft?.height,
     annotations: img.draft?.annotations,
+    crop: img.draft?.crop,
   }
 }
 

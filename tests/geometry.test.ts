@@ -10,7 +10,7 @@ import {
   polylineLength,
   simplifyPath,
 } from '@/lib/geometry'
-import { normalizeDelay, pathName, sanitizeLanding, sanitizePaths } from '@/lib/paths'
+import { normalizeDelay, routeName, sanitizeLanding, sanitizePaths, sanitizeRoutes } from '@/lib/paths'
 
 describe('map scale', () => {
   it('uses the Ascent reference room (20 m = 144.5 px of the 1024 px image)', () => {
@@ -100,9 +100,9 @@ describe('paths', () => {
     expect(pointAlong([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }], 0.5, m)).toEqual({ x: 100, y: 0 })
   })
 
-  it('names paths by their order unless renamed', () => {
-    expect(pathName({ name: '' }, 0)).toBe('路径1')
-    expect(pathName({ name: '  A 小 ' }, 3)).toBe('A 小')
+  it('names route versions by their order unless renamed', () => {
+    expect(routeName({ name: '' }, 0)).toBe('版本1')
+    expect(routeName({ name: '  A 小 ' }, 3)).toBe('A 小')
   })
 
   it('sanitizes stored landings and paths', () => {
@@ -116,10 +116,28 @@ describe('paths', () => {
       'junk',
     ])
     expect(paths).toHaveLength(2)
-    expect(paths[0]).toEqual({ id: 'a', name: 'x', mode: 'knife', points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] })
+    // 旧数据里路径的名称不再保存
+    expect(paths[0]).toEqual({ id: 'a', mode: 'knife', points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] })
     expect(paths[1]!.id).not.toBe('a')
     expect(paths[1]!.points).toHaveLength(2)
     expect(sanitizePaths(null)).toEqual([])
+  })
+
+  it('sanitizes route versions and converts legacy paths', () => {
+    const line = [{ x: 1, y: 1 }, { x: 2, y: 2 }]
+    const routes = sanitizeRoutes([
+      { id: 'r1', name: '  快 ', paths: [{ id: 'p', mode: 'knife', points: line }] },
+      { id: 'r2', name: 'empty', paths: [] },
+      { id: 'r1', name: 'x'.repeat(40), paths: [{ id: 'q', mode: 'walk', points: line }] },
+      'junk',
+    ])
+    expect(routes.map((r) => r.name)).toEqual(['快', 'x'.repeat(20)])
+    expect(routes[1]!.id).not.toBe('r1')
+    // 旧版本只有一组路径：转成一个未命名的版本
+    expect(sanitizeRoutes(undefined, [{ id: 'p', mode: 'knife', points: line }])).toEqual([
+      { id: 'route_1', name: '', paths: [{ id: 'p', mode: 'knife', points: line }] },
+    ])
+    expect(sanitizeRoutes(undefined, undefined)).toEqual([])
   })
 
   it('normalizes landing delays', () => {

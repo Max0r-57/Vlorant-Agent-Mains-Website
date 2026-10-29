@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { computePosition } from '@/lib/floating'
 import { formatShort } from '@/lib/format'
+import { hasPaths } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
 import type { Lineup } from '@/types'
@@ -11,7 +12,8 @@ import LineupThumb from '@/components/lineup/LineupThumb.vue'
 
 /**
  * 标记点预览窗口。单个 Lineup 显示一张卡片；
- * 同一位置有多个 Lineup 时显示可以左右滑动（拖动 / 滚轮 / 箭头）的卡片列表。
+ * 同一位置有多个 Lineup 时显示可以自由左右滑动（拖动 / 滚轮 / 下方滑动条）的卡片栏。
+ * selectable 时点击卡片选中 / 取消选中（首页）。
  */
 const props = withDefaults(
   defineProps<{
@@ -25,8 +27,21 @@ const props = withDefaults(
     showCreate?: boolean
     /** 有路径的 Lineup 显示「现场演练」按钮（首页） */
     showRehearse?: boolean
+    /** 点击卡片选中 / 取消选中 */
+    selectable?: boolean
+    selectedIds?: readonly string[]
+    /** 查看图片时可以连续切换的 Lineup 列表（默认为这个位置的 Lineup） */
+    sequence?: readonly Lineup[]
   }>(),
-  { radius: 10, focusId: null, currentId: null, showCreate: true, showRehearse: false },
+  {
+    radius: 10,
+    focusId: null,
+    currentId: null,
+    showCreate: true,
+    showRehearse: false,
+    selectable: false,
+    selectedIds: () => [],
+  },
 )
 const emit = defineEmits<{
   enter: []
@@ -35,8 +50,10 @@ const emit = defineEmits<{
   detail: [id: string]
   rehearse: [id: string]
   'create-same': []
-  /** 当前显示的卡片（多个 Lineup 时随滑动变化） */
+  /** 当前预览的卡片（鼠标移到哪张卡片上就是哪张），地图上显示它的落点和路径 */
   current: [id: string]
+  /** 点击卡片：选中 / 取消选中 */
+  select: [id: string]
 }>()
 
 const store = useLineups()
@@ -44,19 +61,16 @@ const ui = useUi()
 const root = ref<HTMLElement>()
 const track = ref<HTMLElement>()
 const pos = ref({ left: -9999, top: -9999, side: 'top' as 'top' | 'bottom' | 'left' | 'right' })
-const index = ref(0)
 
 const isStack = computed(() => props.lineups.length > 1)
-const CARD_W = 236
-const GAP = 10
+const selected = computed(() => new Set(props.selectedIds))
+const CARD_W = 188
+const GAP = 8
 
-watch(
-  () => props.lineups[index.value]?.id,
-  (id) => {
-    if (id) emit('current', id)
-  },
-  { immediate: true },
-)
+function initialCurrent() {
+  const l = props.lineups.find((x) => x.id === props.focusId) ?? props.lineups[0]
+  if (l) emit('current', l.id)
+}
 
 function place() {
   const el = root.value
@@ -79,43 +93,42 @@ watch(() => [props.anchor.x, props.anchor.y], place)
 
 let ro: ResizeObserver | null = null
 onMounted(async () => {
+  initialCurrent()
   await nextTick()
   place()
   ro = new ResizeObserver(place)
   if (root.value) ro.observe(root.value)
   scrollToFocus(false)
 })
-onBeforeUnmount(() => ro?.disconnect())
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  cancelAnimationFrame(glide)
+})
 
 watch(
   () => props.focusId,
-  () => scrollToFocus(true),
+  () => {
+    initialCurrent()
+    scrollToFocus(true)
+  },
 )
 watch(
   () => props.lineups.map((l) => l.id).join(),
   async () => {
+    initialCurrent()
     await nextTick()
     place()
     scrollToFocus(false)
   },
 )
 
+/** 把聚焦的卡片滚到可见范围的中间 */
 function scrollToFocus(smooth: boolean) {
+  const t = track.value
   const i = props.focusId ? props.lineups.findIndex((l) => l.id === props.focusId) : -1
-  scrollToIndex(i >= 0 ? i : 0, smooth)
-}
-
-function scrollToIndex(i: number, smooth = true) {
-  const t = track.value
-  index.value = Math.max(0, Math.min(props.lineups.length - 1, i))
-  if (!t) return
-  t.scrollTo({ left: index.value * (CARD_W + GAP), behavior: smooth ? 'smooth' : 'auto' })
-}
-
-function onScroll() {
-  const t = track.value
-  if (!t || dragging) return
-  index.value = Math.round(t.scrollLeft / (CARD_W + GAP))
+  if (!t || i < 0) return
+  const left = i * (CARD_W + GAP) - (t.clientWidth - CARD_W) / 2
+  t.scrollTo({ left: Math.max(0, left), behavior: smooth ? 'smooth' : 'auto' })
 }
 
 // 竖向滚轮转为横向滑动
@@ -124,17 +137,27 @@ function onWheel(e: WheelEvent) {
   if (!t || !isStack.value) return
   if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
     e.preventDefault()
-    t.scrollBy({ left: e.deltaY, behavior: 'auto' })
+    cancelAnimationFrame(glide)
+    t.scrollBy({ left: e.deltaY, behavior: 'smooth' })
   }
 }
 
-// 鼠标按住左右拖动
+// 鼠标按住左右拖动，松开后带一点惯性继续滑动
 let dragging = false
 let dragStart = { x: 0, scroll: 0, moved: false }
+let velocity = 0
+let lastMove = { x: 0, t: 0 }
+let glide = 0
 function onTrackPointerDown(e: PointerEvent) {
   if (e.pointerType !== 'mouse' || e.button !== 0 || !isStack.value) return
+  // 拖动下方的滑动条时交给浏览器
+  const t = track.value!
+  if (e.clientY > t.getBoundingClientRect().top + t.clientHeight) return
+  cancelAnimationFrame(glide)
   dragging = true
-  dragStart = { x: e.clientX, scroll: track.value!.scrollLeft, moved: false }
+  dragStart = { x: e.clientX, scroll: t.scrollLeft, moved: false }
+  velocity = 0
+  lastMove = { x: e.clientX, t: performance.now() }
 }
 function onTrackPointerMove(e: PointerEvent) {
   if (!dragging || !track.value) return
@@ -145,24 +168,44 @@ function onTrackPointerMove(e: PointerEvent) {
     track.value.setPointerCapture(e.pointerId)
     track.value.classList.add('grabbing')
   }
+  const now = performance.now()
+  const dt = Math.max(1, now - lastMove.t)
+  velocity = 0.8 * ((lastMove.x - e.clientX) / dt) + 0.2 * velocity
+  lastMove = { x: e.clientX, t: now }
   track.value.scrollLeft = dragStart.scroll - dx
 }
 function onTrackPointerUp() {
   if (!dragging || !track.value) return
+  const t = track.value
   const moved = dragStart.moved
   dragging = false
-  track.value.classList.remove('grabbing')
-  if (moved) {
-    const i = Math.round(track.value.scrollLeft / (CARD_W + GAP))
-    scrollToIndex(i)
-    // 拖动结束时不要触发卡片上的点击
-    const block = (ev: Event) => {
-      ev.stopPropagation()
-      ev.preventDefault()
-    }
-    track.value.addEventListener('click', block, { capture: true, once: true })
-    setTimeout(() => track.value?.removeEventListener('click', block, { capture: true }), 0)
+  t.classList.remove('grabbing')
+  if (!moved) return
+  // 惯性：速度（像素 / 毫秒）逐帧衰减
+  let v = performance.now() - lastMove.t > 80 ? 0 : velocity
+  let prev = performance.now()
+  const step = (now: number) => {
+    const dt = now - prev
+    prev = now
+    v *= Math.pow(0.94, dt / 16)
+    if (Math.abs(v) < 0.02) return
+    t.scrollLeft += v * dt
+    glide = requestAnimationFrame(step)
   }
+  glide = requestAnimationFrame(step)
+  // 拖动结束时不要触发卡片上的点击
+  const block = (ev: Event) => {
+    ev.stopPropagation()
+    ev.preventDefault()
+  }
+  t.addEventListener('click', block, { capture: true, once: true })
+  setTimeout(() => t.removeEventListener('click', block, { capture: true }), 0)
+}
+
+function onCardClick(l: Lineup, e: MouseEvent) {
+  emit('current', l.id)
+  if (!props.selectable || (e.target as HTMLElement).closest('button')) return
+  emit('select', l.id)
 }
 
 function openImages(l: Lineup) {
@@ -170,11 +213,7 @@ function openImages(l: Lineup) {
     emit('detail', l.id)
     return
   }
-  ui.openLightbox(
-    l.imageIds.map((id) => ({ kind: 'stored' as const, id })),
-    0,
-    l.name,
-  )
+  ui.openLineupImages(props.sequence ?? props.lineups, l.id)
 }
 </script>
 
@@ -195,31 +234,11 @@ function openImages(l: Lineup) {
           <Icon name="layers" :size="15" />
           此位置 {{ lineups.length }} 个 Lineup
         </span>
-        <span class="pager tabular">{{ index + 1 }} / {{ lineups.length }}</span>
-        <button
-          type="button"
-          class="nav"
-          aria-label="上一个"
-          :disabled="index === 0"
-          @click="scrollToIndex(index - 1)"
-        >
-          <Icon name="chevronLeft" :size="16" />
-        </button>
-        <button
-          type="button"
-          class="nav"
-          aria-label="下一个"
-          :disabled="index === lineups.length - 1"
-          @click="scrollToIndex(index + 1)"
-        >
-          <Icon name="chevronRight" :size="16" />
-        </button>
       </header>
 
       <div
         ref="track"
         class="track"
-        @scroll.passive="onScroll"
         @wheel="onWheel"
         @pointerdown="onTrackPointerDown"
         @pointermove="onTrackPointerMove"
@@ -227,11 +246,19 @@ function openImages(l: Lineup) {
         @pointercancel="onTrackPointerUp"
       >
         <article
-          v-for="(l, i) in lineups"
+          v-for="l in lineups"
           :key="l.id"
           class="card"
-          :class="{ focused: isStack && l.id === focusId, current: l.id === currentId, dim: isStack && i !== index }"
+          :class="{
+            focused: isStack && l.id === focusId && !selectable,
+            current: l.id === currentId,
+            selectable,
+            selected: selected.has(l.id),
+          }"
           :style="{ width: isStack ? `${CARD_W}px` : undefined }"
+          :aria-selected="selectable ? selected.has(l.id) : undefined"
+          @pointerenter="emit('current', l.id)"
+          @click="onCardClick(l, $event)"
         >
           <button
             type="button"
@@ -245,6 +272,7 @@ function openImages(l: Lineup) {
               {{ l.imageIds.length }}
             </span>
             <span v-if="l.id === currentId" class="current-tag">当前</span>
+            <span v-if="selected.has(l.id)" class="selected-tag"><Icon name="check" :size="12" :stroke="3" /></span>
           </button>
           <div class="body">
             <h3 class="name" :title="l.name">{{ l.name }}</h3>
@@ -253,7 +281,7 @@ function openImages(l: Lineup) {
               <span class="date tabular">{{ formatShort(l.createdAt) }}</span>
             </div>
             <p v-if="l.note" class="note">{{ l.note }}</p>
-            <div v-if="l.id !== currentId || (showRehearse && l.paths.length)" class="btn-row">
+            <div v-if="l.id !== currentId || (showRehearse && hasPaths(l))" class="btn-row">
               <button
                 v-if="l.id !== currentId"
                 type="button"
@@ -264,7 +292,7 @@ function openImages(l: Lineup) {
                 <Icon name="chevronRight" :size="14" />
               </button>
               <button
-                v-if="showRehearse && l.paths.length"
+                v-if="showRehearse && hasPaths(l)"
                 type="button"
                 class="btn btn-sm btn-outline rehearse-btn"
                 @click="emit('rehearse', l.id)"
@@ -302,7 +330,7 @@ function openImages(l: Lineup) {
   animation: pop-in 0.14s var(--ease);
 }
 .popover.stack {
-  width: 286px;
+  width: 336px;
 }
 @keyframes pop-in {
   from {
@@ -325,48 +353,33 @@ function openImages(l: Lineup) {
   font-size: 12px;
   font-weight: 700;
 }
-.pager {
-  margin-right: 4px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.nav {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  color: var(--text);
-}
-.nav:hover:not(:disabled) {
-  background: var(--surface-3);
-}
-.nav:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
 .track {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   padding: 10px;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
   overscroll-behavior-x: contain;
 }
-.track::-webkit-scrollbar {
-  display: none;
-}
 .stack .track {
-  padding-right: 30px;
+  padding-bottom: 8px;
   cursor: grab;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+.stack .track::-webkit-scrollbar {
+  height: 8px;
+}
+.stack .track::-webkit-scrollbar-thumb {
+  border: 2px solid var(--bg-elev);
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.stack .track::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
 }
 .track.grabbing {
-  scroll-snap-type: none;
   cursor: grabbing;
+  user-select: none;
 }
 .card {
   flex: none;
@@ -375,13 +388,20 @@ function openImages(l: Lineup) {
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--surface);
-  scroll-snap-align: start;
   transition:
-    opacity 0.2s var(--ease),
-    border-color 0.2s var(--ease);
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
 }
-.card.dim {
-  opacity: 0.55;
+.card.selectable {
+  cursor: pointer;
+}
+.card.selectable:hover {
+  border-color: var(--line-strong);
+}
+.card.selected,
+.card.selected:hover {
+  border-color: var(--cyan);
+  box-shadow: inset 0 0 0 1px var(--cyan);
 }
 .card.focused {
   border-color: var(--cyan-dim);
@@ -427,6 +447,18 @@ function openImages(l: Lineup) {
   color: #1b1400;
   font-size: 11px;
   font-weight: 800;
+}
+.selected-tag {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--cyan);
+  color: #031614;
 }
 .body {
   display: flex;

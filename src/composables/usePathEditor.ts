@@ -1,42 +1,46 @@
 import { computed, reactive, ref } from 'vue'
 import { newId } from '@/lib/id'
-import { pathName, plainPaths } from '@/lib/paths'
+import { MAX_ROUTE_NAME, plainPaths, routeName } from '@/lib/paths'
 import type { LineupPath, Position } from '@/types'
 
 /**
- * 路径编辑的状态（首页新建 Lineup 和详情页共用）：
- * - 还没画线时，编辑的是「下一条待画的路径」，可以先填好名称和行走方式；
- * - 画完一条路径后自动选中它，在开始画下一条之前都可以修改它的信息；
+ * 路径编辑的状态（首页新建 Lineup 和详情页共用），一次编辑一个路径版本：
+ * - 版本可以命名（为空时显示「版本 N」），各段路径不单独命名，只选择行走方式；
+ * - 还没画线时，编辑的是「下一段待画的路径」，可以先选好行走方式；
+ * - 画完一段路径后自动选中它，在开始画下一段之前都可以修改它的行走方式；
  *   也可以点击地图上的路径或列表选中之前的路径；
- * - 「重画该路径」撤销当前路径，编辑框退回上一条路径；没有上一条时停留在待画的路径。
- *   之后画的线会放回原来的位置，并沿用原来的名称和行走方式；
+ * - 「重画该路径」撤销当前路径，编辑框退回上一段路径；没有上一段时停留在待画的路径。
+ *   之后画的线会放回原来的位置，并沿用原来的行走方式；
  * - 序号不能重复、上限为已画的路径数：修改序号时与原来占用该序号的路径交换位置。
  */
 export interface PendingPath {
-  name: string
   mode: string
   /** 重画时新路径放回的位置（null 表示追加到最后） */
   insertAt: number | null
 }
 
 function emptyPending(): PendingPath {
-  return { name: '', mode: '', insertAt: null }
+  return { mode: '', insertAt: null }
 }
 
-function serialize(paths: readonly LineupPath[]) {
-  return JSON.stringify(paths.map((p) => [p.name.trim(), p.mode, p.points.map((q) => [q.x, q.y])]))
+function serialize(name: string, paths: readonly LineupPath[]) {
+  return JSON.stringify([name.trim(), paths.map((p) => [p.mode, p.points.map((q) => [q.x, q.y])])])
 }
 
 export function createPathEditor() {
   const paths = ref<LineupPath[]>([])
+  /** 版本名称（空字符串表示使用默认名称「版本 N」） */
+  const name = ref('')
+  /** 这个版本是第几个版本（从 0 开始，用于默认名称） */
+  const routeIndex = ref(0)
   const pending = ref<PendingPath>(emptyPending())
-  /** 当前编辑的路径；null 表示下一条待画的路径 */
+  /** 当前编辑的路径；null 表示下一段待画的路径 */
   const selectedId = ref<string | null>(null)
   /** 点过「完成」后才标出未填写的行走方式 */
   const tried = ref(false)
   /** 进入编辑时已有的路径数 */
   const initialCount = ref(0)
-  const baseline = ref(serialize([]))
+  const baseline = ref(serialize('', []))
 
   const selectedIndex = computed(() =>
     selectedId.value ? paths.value.findIndex((p) => p.id === selectedId.value) : -1,
@@ -46,23 +50,34 @@ export function createPathEditor() {
   const pendingOrder = computed(
     () => Math.min(pending.value.insertAt ?? paths.value.length, paths.value.length) + 1,
   )
-  const dirty = computed(() => serialize(paths.value) !== baseline.value)
-  /** 第一条还没选择行走方式的路径（-1 表示都选好了） */
+  const title = computed(() => routeName({ name: name.value }, routeIndex.value))
+  const dirty = computed(() => serialize(name.value, paths.value) !== baseline.value)
+  /** 第一段还没选择行走方式的路径（-1 表示都选好了） */
   const firstMissing = computed(() => paths.value.findIndex((p) => !p.mode))
 
-  function start(initial: readonly LineupPath[], select: string | null = null) {
+  /**
+   * 开始编辑一个版本。
+   * initial：已有的路径；select：选中的路径；route：版本名称和它是第几个版本。
+   */
+  function start(
+    initial: readonly LineupPath[],
+    select: string | null = null,
+    route: { name?: string; index?: number } = {},
+  ) {
     paths.value = plainPaths(initial)
+    name.value = route.name?.trim() ?? ''
+    routeIndex.value = route.index ?? 0
     pending.value = emptyPending()
     selectedId.value = select && paths.value.some((p) => p.id === select) ? select : null
     tried.value = false
     initialCount.value = paths.value.length
-    baseline.value = serialize(paths.value)
+    baseline.value = serialize(name.value, paths.value)
   }
 
-  /** 画完一条线：用待画路径的信息生成新路径并选中它 */
+  /** 画完一段线：用待画路径的行走方式生成新路径并选中它 */
   function addStroke(points: Position[]) {
     const p = pending.value
-    const path: LineupPath = { id: newId('path'), name: p.name.trim(), mode: p.mode, points }
+    const path: LineupPath = { id: newId('path'), mode: p.mode, points }
     const at = p.insertAt === null ? paths.value.length : Math.min(p.insertAt, paths.value.length)
     paths.value.splice(at, 0, path)
     pending.value = emptyPending()
@@ -74,15 +89,10 @@ export function createPathEditor() {
     selectedId.value = id && paths.value.some((p) => p.id === id) ? id : null
   }
 
-  /** 修改名称；与默认名称「路径 N」相同时按未命名处理，调整序号后默认名称会跟着变 */
-  function setName(id: string | null, raw: string) {
-    const name = raw.trim().slice(0, 30)
-    if (id === null) {
-      pending.value.name = name === pathName({ name: '' }, pendingOrder.value - 1) ? '' : name
-      return
-    }
-    const i = paths.value.findIndex((p) => p.id === id)
-    if (i >= 0) paths.value[i]!.name = name === pathName({ name: '' }, i) ? '' : name
+  /** 修改版本名称；与默认名称「版本 N」相同时按未命名处理 */
+  function setName(raw: string) {
+    const v = raw.trim().slice(0, MAX_ROUTE_NAME)
+    name.value = v === routeName({ name: '' }, routeIndex.value) ? '' : v
   }
 
   function setMode(id: string | null, mode: string) {
@@ -109,11 +119,11 @@ export function createPathEditor() {
     const i = selectedIndex.value
     if (i < 0) return
     const [removed] = paths.value.splice(i, 1)
-    pending.value = { name: removed!.name, mode: removed!.mode, insertAt: i }
+    pending.value = { mode: removed!.mode, insertAt: i }
     selectedId.value = i > 0 ? paths.value[i - 1]!.id : null
   }
 
-  /** 删除某条路径（不影响待画路径的信息） */
+  /** 删除某段路径（不影响待画路径的信息） */
   function remove(id: string) {
     const i = paths.value.findIndex((p) => p.id === id)
     if (i < 0) return
@@ -123,14 +133,14 @@ export function createPathEditor() {
     if (selectedId.value === id) selectedId.value = paths.value[Math.max(0, i - 1)]?.id ?? null
   }
 
-  /** 完成前检查，返回错误信息（并选中第一条有问题的路径）；没有问题返回 null */
+  /** 完成前检查，返回错误信息（并选中第一段有问题的路径）；没有问题返回 null */
   function validate(): string | null {
     tried.value = true
     if (!paths.value.length) return initialCount.value ? null : '请先在地图上画出路径'
     const i = firstMissing.value
     if (i >= 0) {
       selectedId.value = paths.value[i]!.id
-      return `请为「${pathName(paths.value[i]!, i)}」选择行走方式`
+      return `请为第 ${i + 1} 段路径选择行走方式`
     }
     return null
   }
@@ -142,6 +152,9 @@ export function createPathEditor() {
 
   return reactive({
     paths,
+    name,
+    routeIndex,
+    title,
     pending,
     selectedId,
     tried,

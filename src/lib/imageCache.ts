@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { getImage } from '@/db/repo'
-import type { Annotation, MediaKind, StoredImage } from '@/types'
+import type { Annotation, CropRect, MediaKind, StoredImage } from '@/types'
 
 /**
  * 图片 / 视频的 URL 缓存：IndexedDB 里的 Blob → object URL。
@@ -16,6 +16,8 @@ export interface MediaInfo {
   /** 视频时长（秒），图片为 0 */
   duration: number
   annotations: readonly Annotation[]
+  /** 图片的裁剪范围（原图像素），null 表示不裁剪 */
+  crop: CropRect | null
 }
 
 const MAX_FULL = 40
@@ -38,6 +40,7 @@ export function mediaInfoOf(img: StoredImage): MediaInfo {
     height: img.height,
     duration: img.duration ?? 0,
     annotations: img.annotations ?? [],
+    crop: img.crop ?? null,
   }
 }
 

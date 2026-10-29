@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import type { Annotation, ImageSource } from '@/types'
+import type { Annotation, CropRect, ImageSource, Lineup } from '@/types'
 
 export interface Toast {
   id: number
@@ -26,12 +26,20 @@ interface ConfirmState extends ConfirmOptions {
   resolve: (result: ConfirmResult) => void
 }
 
+/** 查看器里可以连续查看的一组 Lineup（看完一个 Lineup 的最后一张图片后切换到下一个） */
+export interface LightboxGroup {
+  title: string
+  sources: ImageSource[]
+}
+
 export interface LightboxOptions {
   /**
-   * 给还没保存的图片（url 来源）保存标注：由打开查看器的地方负责更新草稿，返回更新后的来源。
+   * 给还没保存的图片（url 来源）保存标注和裁剪：由打开查看器的地方负责更新草稿，返回更新后的来源。
    * 已保存的图片（stored 来源）直接写入数据库，不需要这个回调。
    */
-  annotateDraft?: (index: number, annotations: Annotation[]) => Promise<ImageSource | null>
+  annotateDraft?: (index: number, annotations: Annotation[], crop: CropRect | null) => Promise<ImageSource | null>
+  /** 连续查看的 Lineup 列表和当前是第几个 */
+  sequence?: { groups: LightboxGroup[]; index: number }
 }
 
 export interface LightboxState extends LightboxOptions {
@@ -59,6 +67,22 @@ export const useUi = defineStore('ui', () => {
   function openLightbox(sources: ImageSource[], index = 0, title?: string, opts: LightboxOptions = {}) {
     if (!sources.length) return
     lightbox.value = { ...opts, sources, index: Math.min(Math.max(0, index), sources.length - 1), title }
+  }
+
+  /**
+   * 查看某个 Lineup 的图片 / 视频；list 是它所在的列表（导览栏的结果、字典的列表……），
+   * 看到最后一张时可以切换到列表里的下一个有图片的 Lineup。
+   */
+  function openLineupImages(list: readonly Lineup[], id: string, index = 0) {
+    const withImages = list.filter((l) => l.imageIds.length || l.id === id)
+    const groups = withImages.map((l) => ({
+      title: l.name,
+      sources: l.imageIds.map((imageId) => ({ kind: 'stored' as const, id: imageId })),
+    }))
+    const at = withImages.findIndex((l) => l.id === id)
+    const group = groups[at]
+    if (!group?.sources.length) return
+    openLightbox(group.sources, index, group.title, { sequence: { groups, index: at } })
   }
 
   function closeLightbox() {
@@ -107,6 +131,7 @@ export const useUi = defineStore('ui', () => {
     toasts,
     confirmState,
     openLightbox,
+    openLineupImages,
     closeLightbox,
     toast,
     dismissToast,
