@@ -24,7 +24,7 @@ const shortcuts: [string, string][] = [
       一个使用Claude制作的无畏契约（VALORANT）Lineup 记录与回顾工具：在战术地图上标记定投、下烟等技巧的位置，
       配上截图和备注，随时搜索回顾。版本 {{ version }} ·
       <a :href="REPO_URL" target="_blank" rel="noopener">GitHub 仓库</a>
-      制作人：Max0r
+      <br>制作人：Max0r<br>
     </p>
   </section>
   <section class="s-section">
