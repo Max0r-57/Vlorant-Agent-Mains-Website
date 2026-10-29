@@ -203,7 +203,6 @@ async function clearAll() {
       <div class="s-row-text">
         <span class="s-row-label">导出备份</span>
         <span class="s-row-hint">
-          打包为一个 .zip 文件（包含全部 Lineup、类型、图片和视频）。
           <template v-if="lastExport">上次导出：{{ formatDateTime(lastExport) }}</template>
           <template v-else>还没有导出过备份。</template>
         </span>
@@ -216,7 +215,7 @@ async function clearAll() {
     <div class="s-row">
       <div class="s-row-text">
         <span class="s-row-label">导入备份</span>
-        <span class="s-row-hint">选择之前导出的 .zip 文件，可以与现有数据合并，或完全覆盖</span>
+        <span class="s-row-hint">选择备份文件（.zip），可合并或覆盖</span>
       </div>
       <button type="button" class="btn btn-outline" :disabled="!!busy" @click="fileInput?.click()">
         <Icon name="upload" :size="16" />
