@@ -78,9 +78,6 @@ async function create() {
 <template>
   <section class="s-section">
     <h3 class="s-title">类型管理</h3>
-    <p class="s-desc">
-      类型就是 Lineup 的分类标签，地图上圆点的颜色代表它的类型。修改颜色会立即应用到所有该类型的 Lineup。
-    </p>
 
     <ul class="type-list">
       <li v-for="(t, i) in types" :key="t.id" class="type-row" :class="{ open: editingColor === t.id || deleting?.id === t.id }">
