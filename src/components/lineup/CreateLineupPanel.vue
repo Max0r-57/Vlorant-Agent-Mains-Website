@@ -251,7 +251,7 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
         </label>
 
         <div class="field">
-          <span class="field-label">类型 <span class="req">*</span><span class="field-hint">可在下拉菜单中新建</span></span>
+          <span class="field-label">类型 <span class="req">*</span></span>
           <TypePicker v-model="typeId" :invalid="!!typeError" />
           <span v-if="typeError" class="field-error">{{ typeError }}</span>
         </div>
@@ -321,7 +321,7 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
         </div>
 
         <div class="field">
-          <span class="field-label">图片 / 视频<span class="field-hint">第一个为预览图</span></span>
+          <span class="field-label">图片 / 视频</span>
           <ImageManager v-model="images" compact :listen-paste="!hidden" :title="name || '新建 Lineup'" />
         </div>
 
