@@ -274,12 +274,12 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
             </div>
             <template v-if="landing">
               <label class="field delay">
-                <span class="field-label">落点时间<span class="field-hint">从出发到落地，现场演练时先倒数</span></span>
+                <span class="field-label">落点时间</span>
                 <DelayInput :model-value="landing.delay" @update:model-value="setDelay" />
               </label>
               <p class="extra-hint">
                 <template v-if="spec">
-                  拖动地图上的<b class="molly">红色圆形</b>摆放{{ spec.label }}落点（直径 {{ spec.diameter }} 米）
+                  可拖动图形以摆放{{ spec.label }}落点
                 </template>
                 <template v-else>拖动地图上的<b class="molly">落点标记</b>摆放落点</template>
               </p>
