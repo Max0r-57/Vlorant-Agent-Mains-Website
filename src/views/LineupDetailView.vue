@@ -310,7 +310,7 @@ watch(
         <header class="card-head">
           <h2>图片 / 视频</h2>
           <span class="count tabular">{{ images.length }}</span>
-          <span class="card-hint">第一张为预览图 · 拖动排序 · 点击查看大图 · 支持 Ctrl+V 粘贴截图</span>
+          <span class="card-hint">可拖动排序 · 支持 Ctrl+V 粘贴截图</span>
         </header>
         <ImageManager v-model="images" :title="form.name" />
       </section>
@@ -332,9 +332,6 @@ watch(
       <section class="card">
         <header class="card-head">
           <h2>地图位置</h2>
-          <span class="card-hint">
-            显示 {{ agent?.name }} 在该地图的全部 Lineup，黄色为当前 Lineup；落点参照、路径追踪和现场演练也在这张图里
-          </span>
         </header>
         <PositionEditor
           ref="positionEditor"
