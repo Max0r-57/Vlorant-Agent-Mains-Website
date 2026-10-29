@@ -30,8 +30,6 @@ const props = withDefaults(
     /** 点击卡片选中 / 取消选中 */
     selectable?: boolean
     selectedIds?: readonly string[]
-    /** 查看图片时可以连续切换的 Lineup 列表（默认为这个位置的 Lineup） */
-    sequence?: readonly Lineup[]
   }>(),
   {
     radius: 10,
@@ -213,7 +211,8 @@ function openImages(l: Lineup) {
     emit('detail', l.id)
     return
   }
-  ui.openLineupImages(props.sequence ?? props.lineups, l.id)
+  // 同一位置有多个 Lineup 时，查看图片可以接着切换到这个位置的下一个 Lineup
+  ui.openLineupImages(isStack.value ? props.lineups : [l], l.id)
 }
 </script>
 

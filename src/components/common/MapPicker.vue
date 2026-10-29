@@ -44,7 +44,14 @@ function pick(id: string | null, close: () => void) {
         aria-haspopup="listbox"
         @click="toggle"
       >
-        <img v-if="current" class="hero-bg" :src="current.image" alt="" draggable="false" />
+        <img
+          v-if="current"
+          class="hero-bg"
+          :class="{ minimap: !current.preview }"
+          :src="current.preview ?? current.image"
+          alt=""
+          draggable="false"
+        />
         <span class="hero-text">
           <span class="eyebrow">Map · 地图</span>
           <span class="hero-name">
@@ -63,7 +70,7 @@ function pick(id: string | null, close: () => void) {
         aria-haspopup="listbox"
         @click="toggle"
       >
-        <img v-if="current" class="compact-thumb" :src="current.image" alt="" />
+        <img v-if="current" class="compact-thumb" :src="current.preview ?? current.image" alt="" />
         <Icon v-else name="map" :size="16" />
         <span class="ellipsis">{{ current?.name ?? '全部地图' }}</span>
         <Icon name="chevronDown" :size="16" class="chev" />
@@ -93,12 +100,14 @@ function pick(id: string | null, close: () => void) {
           :key="m.id"
           type="button"
           class="row"
+          :class="{ 'has-bg': !!m.preview }"
           data-dd-item
           role="option"
           :aria-selected="modelValue === m.id"
           @click="pick(m.id, close)"
         >
-          <img class="thumb" :src="m.image" alt="" loading="lazy" draggable="false" />
+          <img v-if="m.preview" class="row-bg" :src="m.preview" alt="" loading="lazy" draggable="false" />
+          <img v-else class="thumb" :src="m.image" alt="" loading="lazy" draggable="false" />
           <span class="row-text">
             <span class="row-name">{{ m.name }}</span>
             <span v-if="m.en" class="row-sub">{{ m.en }}</span>
@@ -138,16 +147,25 @@ function pick(id: string | null, close: () => void) {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: 50% 50%;
+  opacity: 0.9;
+  pointer-events: none;
+  transition: transform 0.3s var(--ease);
+}
+.hero:hover .hero-bg {
+  transform: scale(1.04);
+}
+/* 没有预览图时用俯瞰图，放大一些只露出中间部分 */
+.hero-bg.minimap {
   object-position: 50% 45%;
   transform: scale(1.8);
   opacity: 0.55;
-  pointer-events: none;
 }
 .hero::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgb(10 15 19 / 0.95) 0%, rgb(10 15 19 / 0.7) 55%, rgb(10 15 19 / 0.2) 100%);
+  background: linear-gradient(90deg, rgb(10 15 19 / 0.9) 0%, rgb(10 15 19 / 0.55) 55%, rgb(10 15 19 / 0.1) 100%);
   pointer-events: none;
 }
 .hero-text {
@@ -193,7 +211,7 @@ function pick(id: string | null, close: () => void) {
   margin-left: auto;
 }
 .compact-thumb {
-  width: 20px;
+  width: 30px;
   height: 20px;
   border-radius: var(--r-xs);
   object-fit: cover;
@@ -203,7 +221,7 @@ function pick(id: string | null, close: () => void) {
 .list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .row {
   display: flex;
@@ -223,6 +241,62 @@ function pick(id: string | null, close: () => void) {
 }
 .row[aria-selected='true'] {
   background: var(--cyan-soft);
+}
+/* 有预览图的地图：预览图铺满整行作为背景 */
+.row.has-bg {
+  position: relative;
+  min-height: 52px;
+  padding: 8px 10px 8px 12px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: var(--bg);
+}
+.row-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.75;
+  pointer-events: none;
+  transition:
+    opacity 0.15s var(--ease),
+    transform 0.3s var(--ease);
+}
+.row.has-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgb(10 15 19 / 0.92) 0%, rgb(10 15 19 / 0.6) 55%, rgb(10 15 19 / 0.35) 100%);
+  pointer-events: none;
+}
+.row.has-bg > :not(.row-bg) {
+  position: relative;
+  z-index: 1;
+}
+.row.has-bg:hover,
+.row.has-bg:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--bg);
+}
+.row.has-bg:hover .row-bg,
+.row.has-bg:focus-visible .row-bg {
+  opacity: 1;
+  transform: scale(1.04);
+}
+.row.has-bg[aria-selected='true'] {
+  border-color: var(--cyan);
+  background: var(--bg);
+}
+.row.has-bg .row-name {
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+.row.has-bg .row-sub {
+  color: var(--text-2);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+.row.has-bg .count {
+  background: rgb(10 15 19 / 0.8);
 }
 .thumb {
   flex: none;

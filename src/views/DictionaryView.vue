@@ -206,7 +206,7 @@ const preview = computed(() => hovered.value ?? results.value[0] ?? null)
 
 function openImages(l: Lineup) {
   if (!l.imageIds.length) return
-  ui.openLineupImages(results.value, l.id)
+  ui.openLineupImages([l], l.id)
 }
 </script>
 

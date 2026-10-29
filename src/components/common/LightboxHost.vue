@@ -11,8 +11,9 @@ import ImageAnnotator from '@/components/media/ImageAnnotator.vue'
 import Icon from './Icon.vue'
 
 /**
- * 图片 / 视频查看器：图片铺满整个页面，左右两侧是半透明的切换按钮；
- * 看到一个 Lineup 的最后一张时，「下一个」按钮变色，点击切换到列表里的下一个 Lineup（第一张时「上一个」同理）。
+ * 图片 / 视频查看器：图片铺满整个页面，左右两侧是半透明的切换按钮（没有可以切换的内容时隐藏）；
+ * 查看同一位置的多个 Lineup 时，看到一个 Lineup 的最后一张，「下一个」按钮变色，
+ * 点击切换到这个位置的下一个 Lineup（第一张时「上一个」同理）。
  * 图片可以滚轮 / 双指缩放、拖动平移、双击放大，并且可以「编辑」添加标注、裁剪；
  * 视频用浏览器自带的播放控件播放。
  */
@@ -593,24 +594,24 @@ watch(
         </header>
 
         <button
+          v-if="canPrev"
           type="button"
           class="nav prev"
           :class="{ group: prevIsGroup }"
-          :disabled="!canPrev"
           :aria-label="prevIsGroup ? '上一个 Lineup' : '上一个'"
           @click="go(-1)"
         >
-          <Icon name="chevronLeft" :size="30" />
+          <Icon name="chevronLeft" :size="36" />
         </button>
         <button
+          v-if="canNext"
           type="button"
           class="nav next"
           :class="{ group: nextIsGroup }"
-          :disabled="!canNext"
           :aria-label="nextIsGroup ? '下一个 Lineup' : '下一个'"
           @click="go(1)"
         >
-          <Icon name="chevronRight" :size="30" />
+          <Icon name="chevronRight" :size="36" />
         </button>
 
         <footer v-if="total > 1" class="strip">
@@ -671,7 +672,9 @@ watch(
 }
 .title {
   flex: 1;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.25;
   text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
 }
 .counter,
@@ -704,7 +707,7 @@ watch(
 .stage.is-video {
   cursor: default;
   /* 视频的播放控件不能被顶栏、左右切换按钮和缩略图条挡住 */
-  padding: 56px 72px 12px;
+  padding: 64px 112px 12px;
 }
 .stage.is-video.has-strip {
   padding-bottom: 76px;
@@ -766,7 +769,7 @@ watch(
   z-index: 2;
   display: grid;
   place-items: center;
-  width: 72px;
+  width: 112px;
   padding: 0;
   border: 0;
   background: rgb(4 7 10 / 0.28);
@@ -778,10 +781,6 @@ watch(
 .nav:hover:not(:disabled) {
   background: rgb(4 7 10 / 0.5);
   color: #fff;
-}
-.nav:disabled {
-  color: rgb(255 255 255 / 0.18);
-  cursor: default;
 }
 /* 切换到相邻的 Lineup */
 .nav.group {
@@ -805,7 +804,7 @@ watch(
   z-index: 3;
   display: flex;
   gap: 8px;
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 260px);
   padding: 6px;
   overflow-x: auto;
   border-radius: var(--r);
@@ -860,14 +859,17 @@ watch(
 }
 @media (max-width: 640px) {
   .nav {
-    width: 40px;
+    width: 52px;
   }
   .stage.is-video {
-    padding-left: 40px;
-    padding-right: 40px;
+    padding-left: 52px;
+    padding-right: 52px;
   }
   .strip {
-    max-width: calc(100% - 96px);
+    max-width: calc(100% - 120px);
+  }
+  .title {
+    font-size: 20px;
   }
 }
 </style>
