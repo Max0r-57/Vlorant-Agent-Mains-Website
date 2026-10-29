@@ -143,7 +143,6 @@ function setOrder(e: Event) {
           {{ current.length.toFixed(1) }} 米
           <template v-if="current.time !== null"> · 约 {{ formatDuration(current.time) }}</template>
         </template>
-        <template v-else>在地图上按住左键画出这条路径</template>
       </p>
 
       <button type="button" class="btn btn-outline redraw" :disabled="isPending" @click="ed.redraw()">
@@ -187,7 +186,7 @@ function setOrder(e: Event) {
             <span class="num tabular">{{ ed.pendingOrder }}</span>
             <span class="item-text">
               <span class="item-name ellipsis">{{ pathName(ed.pending, ed.pendingOrder - 1) }}</span>
-              <span class="item-meta">待画 · 在地图上画线添加</span>
+              <span class="item-meta">待画</span>
             </span>
           </button>
         </li>
@@ -195,8 +194,7 @@ function setOrder(e: Event) {
       <p class="hint">
         <Icon name="info" :size="14" />
         <span>
-          按住<b>左键</b>画线，松开完成一条路径；起点靠近 Lineup 位置或路径终点会<b>自动吸附</b>，可以接着上一条的终点继续画。
-          点击路径可修改它的信息。<b>右键 / 空格 + 拖动</b>平移地图。
+          <b>右键 / 空格 + 拖动</b>平移地图。
         </span>
       </p>
     </section>
