@@ -153,8 +153,7 @@ function fileTime(f: FolderBackup) {
       <span class="badge" :class="status.cls">{{ status.text }}</span>
     </div>
     <p class="s-desc">
-      选择电脑上的一个文件夹后，每次新增、修改、删除 Lineup，网站都会在几秒后自动把全部数据（包括图片和视频）保存进去：
-      每天一个 <code>lineup-auto-日期.zip</code>，只保留最近几天；视频单独放在文件夹里的 <code>videos</code> 子文件夹。浏览器数据被清掉时，可以从这个文件夹恢复。
+      每天的自动备份放在<code>lineup-auto-日期.zip</code>；视频放在<code>videos</code> 子文件夹。
       <a :href="BACKUP_GUIDE_URL" target="_blank" rel="noopener">查看备份与恢复说明</a>
     </p>
 
@@ -230,8 +229,7 @@ function fileTime(f: FolderBackup) {
 
       <div class="s-row">
         <div class="s-row-text">
-          <span class="s-row-label">保留天数</span>
-          <span class="s-row-hint">每天一个自动备份文件，超过天数的旧文件会被自动删除（手动导出的文件不会被删除）</span>
+          <span class="s-row-label">自动备份保留天数</span>
         </div>
         <select class="select" :value="ab.keepDays" aria-label="保留天数" @change="onKeepDays">
           <option v-for="d in KEEP_DAY_OPTIONS" :key="d" :value="d">{{ d ? `最近 ${d} 天` : '全部保留' }}</option>
