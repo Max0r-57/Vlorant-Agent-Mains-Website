@@ -295,6 +295,19 @@ input[type="date"].input {
 .switch:disabled {
   cursor: not-allowed;
 }
+.switch-sm {
+  width: 30px;
+  height: 18px;
+}
+.switch-sm::after {
+  left: 3px;
+  top: 3px;
+  width: 12px;
+  height: 12px;
+}
+.switch-sm[aria-checked='true']::after {
+  transform: translateX(12px);
+}
 
 /* ---------- 分段选择 ---------- */
 .segmented {

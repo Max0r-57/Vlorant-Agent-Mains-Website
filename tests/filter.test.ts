@@ -17,7 +17,9 @@ function make(p: Partial<Lineup>): Lineup {
     imageIds: [],
     note: '',
     landing: null,
-    paths: [],
+    routes: [],
+    bug: false,
+    invalid: false,
     createdAt: now,
     updatedAt: now,
     ...p,
@@ -98,6 +100,25 @@ describe('area search and hidden lineups', () => {
 
   it('excludes hidden lineups', () => {
     expect(filterLineups(withLanding, { excludeIds: ['out'] }, ctx, now).map((l) => l.id)).toEqual(['in', 'none'])
+  })
+
+  it('hides invalid bug lineups only when asked', () => {
+    const list = [make({ id: 'ok' }), make({ id: 'bug', bug: true }), make({ id: 'dead', bug: true, invalid: true })]
+    expect(filterLineups(list, {}, ctx, now).map((l) => l.id)).toEqual(['ok', 'bug', 'dead'])
+    expect(filterLineups(list, { hideInvalid: true }, ctx, now).map((l) => l.id)).toEqual(['ok', 'bug'])
+  })
+
+  it('filters by feature (any of the chosen ones)', () => {
+    const route = { id: 'r', name: '', paths: [{ id: 'p', mode: 'knife', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }] }
+    const list = [
+      make({ id: 'plain' }),
+      make({ id: 'path', routes: [route] }),
+      make({ id: 'land', landing: { x: 1, y: 1, delay: null } }),
+      make({ id: 'bug', bug: true }),
+    ]
+    expect(filterLineups(list, { features: ['paths'] }, ctx, now).map((l) => l.id)).toEqual(['path'])
+    expect(filterLineups(list, { features: ['landing', 'bug'] }, ctx, now).map((l) => l.id)).toEqual(['land', 'bug'])
+    expect(filterLineups(list, { features: [] }, ctx, now)).toHaveLength(4)
   })
 })
 

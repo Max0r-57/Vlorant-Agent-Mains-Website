@@ -2,11 +2,11 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as repo from '@/db/repo'
 import { applyBackup, type ParsedBackup } from '@/db/backup'
-import { plainAnnotations, renderAnnotatedThumb } from '@/lib/annotations'
+import { plainAnnotations, renderAnnotatedThumb, sanitizeCrop } from '@/lib/annotations'
 import { refreshImages, releaseAllImages, releaseImages } from '@/lib/imageCache'
 import { newId } from '@/lib/id'
-import { plainLanding, plainPaths, sanitizeLanding, sanitizePaths } from '@/lib/paths'
-import type { Annotation, Lineup, LineupDraft, LineupType, StoredImage } from '@/types'
+import { plainLanding, plainRoutes, sanitizeLanding, sanitizeRoutes } from '@/lib/paths'
+import type { Annotation, CropRect, Lineup, LineupDraft, LineupType, StoredImage } from '@/types'
 
 /** 首次使用时自动创建的类型，之后可以在设置里改名、改色或删除 */
 export const DEFAULT_TYPES: Pick<LineupType, 'name' | 'color'>[] = [
@@ -33,11 +33,18 @@ export const TYPE_COLORS = [
 
 const FALLBACK_TYPE = { name: '未分类', color: '#94a3b8' }
 
-/** 旧版本保存的 Lineup 没有落点和路径字段，读取时补上默认值 */
-function normalizeLineup(l: Lineup): Lineup {
-  const landing = sanitizeLanding(l.landing)
-  const paths = sanitizePaths(l.paths)
-  return { ...l, landing, paths }
+/**
+ * 读取时补上新字段的默认值：旧版本保存的 Lineup 没有落点、路径版本（只有一组 paths）、Bug / 失效标记。
+ */
+export function normalizeLineup(raw: Lineup): Lineup {
+  const { paths: legacyPaths, ...l } = raw as Lineup & { paths?: unknown }
+  return {
+    ...l,
+    landing: sanitizeLanding(l.landing),
+    routes: sanitizeRoutes(l.routes, legacyPaths),
+    bug: l.bug === true,
+    invalid: l.invalid === true,
+  }
 }
 
 export const useLineups = defineStore('lineups', () => {
@@ -135,7 +142,9 @@ export const useLineups = defineStore('lineups', () => {
       id: newId('lu'),
       imageIds: images.map((i) => i.id),
       landing: plainLanding(draft.landing),
-      paths: plainPaths(draft.paths),
+      routes: plainRoutes(draft.routes),
+      bug: !!draft.bug,
+      invalid: !!draft.bug && !!draft.invalid,
       createdAt: now,
       updatedAt: now,
     }
@@ -160,7 +169,9 @@ export const useLineups = defineStore('lineups', () => {
       ...patch,
       imageIds: images ? images.imageIds : old.imageIds,
       landing: plainLanding(patch.landing === undefined ? old.landing : patch.landing),
-      paths: plainPaths(patch.paths ?? old.paths),
+      routes: plainRoutes(patch.routes ?? old.routes),
+      bug: patch.bug ?? old.bug,
+      invalid: (patch.bug ?? old.bug) && (patch.invalid ?? old.invalid),
       updatedAt: Date.now(),
     }
     const removed = images ? old.imageIds.filter((i) => !images.imageIds.includes(i)) : []
@@ -171,20 +182,25 @@ export const useLineups = defineStore('lineups', () => {
   }
 
   /**
-   * 保存图片标注：原图不变，写入标注并重新生成带标注的缩略图。
+   * 保存图片标注和裁剪范围：原图不变，写入标注 / 裁剪并重新生成带标注的缩略图。
    * renderThumb 只在测试中替换（测试环境没有 Canvas）。
    */
   async function annotateImage(
     id: string,
     annotations: readonly Annotation[],
+    crop: CropRect | null = null,
     renderThumb: typeof renderAnnotatedThumb = renderAnnotatedThumb,
   ) {
     const img = await repo.getImage(id)
     if (!img) throw new Error('图片不存在或已被删除')
     if (img.kind === 'video') throw new Error('视频不能添加标注')
     const list = plainAnnotations(annotations)
-    const thumb = await renderThumb(img, list)
-    await repo.putImage({ ...img, thumb, annotations: list })
+    const c = sanitizeCrop(crop, img.width, img.height)
+    const thumb = await renderThumb(img, list, c)
+    const next: StoredImage = { ...img, thumb, annotations: list }
+    if (c) next.crop = c
+    else delete next.crop
+    await repo.putImage(next)
     refreshImages([id])
   }
 

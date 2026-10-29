@@ -1,13 +1,13 @@
 import { toRaw } from 'vue'
-import type { Annotation, ArrowAnnotation, Position, TextAnnotation } from '@/types'
+import type { Annotation, ArrowAnnotation, CropRect, Position, TextAnnotation } from '@/types'
 import { distanceToPolyline } from './geometry'
 import { newId } from './id'
 import { encode, fit, THUMB_MAX_SIDE, THUMB_QUALITY, type AnyContext2D } from './image'
 
 /**
- * 图片标注：手动圈画、圆圈、箭头、文本框。
- * 坐标和线宽都以原图像素为单位；原图不会被修改，标注单独保存在图片记录里，
- * 查看时用 SVG 叠加显示（AnnotationLayer），保存时再画进缩略图，让卡片和预览里也能看到。
+ * 图片标注：手动圈画、圆圈、箭头、文本框，以及裁剪。
+ * 坐标和线宽都以原图像素为单位；原图不会被修改，标注和裁剪范围单独保存在图片记录里，
+ * 查看时用 SVG 叠加显示（AnnotationLayer）并按裁剪范围显示，保存时再画进缩略图，让卡片和预览里也能看到。
  */
 
 /** 颜色：红、黄、绿、蓝、白、黑 */
@@ -21,13 +21,13 @@ export const SIZE_LEVELS: { level: SizeLevel; label: string }[] = [
 ]
 
 /** 线宽 / 字号相对于图片长边的比例：同一档在大图和小图上看起来一样粗 */
-const STROKE_RATIO: Record<SizeLevel, number> = { 1: 0.0035, 2: 0.0065, 3: 0.011 }
+const STROKE_RATIO: Record<SizeLevel, number> = { 1: 0.00175, 2: 0.00325, 3: 0.0055 }
 const TEXT_RATIO: Record<SizeLevel, number> = { 1: 0.026, 2: 0.036, 3: 0.05 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 
 export function strokeSize(level: SizeLevel, w: number, h: number) {
-  return Math.max(1.5, round1(Math.max(w, h) * STROKE_RATIO[level]))
+  return Math.max(1, round1(Math.max(w, h) * STROKE_RATIO[level]))
 }
 
 export function textSize(level: SizeLevel, w: number, h: number) {
@@ -131,7 +131,7 @@ export function arrowGeometry(a: Pick<ArrowAnnotation, 'x1' | 'y1' | 'x2' | 'y2'
   const len = Math.hypot(dx, dy) || 1
   const ux = dx / len
   const uy = dy / len
-  const head = Math.min(len * 0.6, Math.max(a.size * 3.6, 10))
+  const head = Math.min(len * 0.6, Math.max(a.size * 3.6, 6))
   const half = head * 0.55
   const bx = a.x2 - ux * head
   const by = a.y2 - uy * head
@@ -231,6 +231,24 @@ export function translateAnnotation(a: Annotation, dx: number, dy: number): Anno
   }
 }
 
+// ---------- 裁剪 ----------
+/** 裁剪范围的最小边长（原图像素） */
+export const MIN_CROP = 16
+
+/**
+ * 校验裁剪范围：取整并限制在图片内；不合法、太小或者就是整张图片时返回 null（不裁剪）。
+ */
+export function sanitizeCrop(v: unknown, width: number, height: number): CropRect | null {
+  if (!isObj(v) || ![v.x, v.y, v.w, v.h].every(finite) || width <= 0 || height <= 0) return null
+  const x = Math.min(Math.max(0, Math.round(v.x as number)), width - 1)
+  const y = Math.min(Math.max(0, Math.round(v.y as number)), height - 1)
+  const w = Math.min(Math.round(v.w as number), width - x)
+  const h = Math.min(Math.round(v.h as number), height - y)
+  if (w < Math.min(MIN_CROP, width) || h < Math.min(MIN_CROP, height)) return null
+  if (x === 0 && y === 0 && w === width && h === height) return null
+  return { x, y, w, h }
+}
+
 // ---------- 保存 / 读取 ----------
 /** 写入 IndexedDB 前转成普通对象（去掉 Vue 的响应式代理） */
 export function plainAnnotations(list: readonly Annotation[] | undefined): Annotation[] {
@@ -309,10 +327,11 @@ function roundRect(ctx: AnyContext2D, x: number, y: number, w: number, h: number
   ctx.closePath()
 }
 
-/** 把标注画到 Canvas 上；k = Canvas 像素 / 原图像素 */
-export function drawAnnotations(ctx: AnyContext2D, list: readonly Annotation[], k: number) {
+/** 把标注画到 Canvas 上；k = Canvas 像素 / 原图像素，(ox, oy) 为 Canvas 左上角对应的原图坐标（裁剪时） */
+export function drawAnnotations(ctx: AnyContext2D, list: readonly Annotation[], k: number, ox = 0, oy = 0) {
   ctx.save()
   ctx.scale(k, k)
+  ctx.translate(-ox, -oy)
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   for (const a of list) {
@@ -363,21 +382,29 @@ export function drawAnnotations(ctx: AnyContext2D, list: readonly Annotation[], 
   ctx.restore()
 }
 
-/** 重新生成缩略图：原图缩小后画上标注（没有标注时就是普通缩略图） */
+/** 重新生成缩略图：按裁剪范围截取原图并缩小，再画上标注（没有标注和裁剪时就是普通缩略图） */
 export async function renderAnnotatedThumb(
   img: { blob: Blob; width: number; height: number },
   annotations: readonly Annotation[],
+  crop: CropRect | null = null,
 ): Promise<Blob> {
   const bitmap = await createImageBitmap(img.blob)
   try {
-    const t = fit(bitmap.width, bitmap.height, THUMB_MAX_SIDE)
-    const k = t.w / (img.width || bitmap.width)
+    const W = img.width || bitmap.width
+    const H = img.height || bitmap.height
+    const c = crop ?? { x: 0, y: 0, w: W, h: H }
+    const t = fit(c.w, c.h, THUMB_MAX_SIDE)
+    const k = t.w / c.w
+    // 原图坐标 → 位图像素（一般两者相同）
+    const bx = bitmap.width / W
+    const by = bitmap.height / H
     return await encode(
       bitmap,
       t.w,
       t.h,
       THUMB_QUALITY,
-      annotations.length ? (ctx) => drawAnnotations(ctx, annotations, k) : undefined,
+      annotations.length ? (ctx) => drawAnnotations(ctx, annotations, k, c.x, c.y) : undefined,
+      crop ? { x: c.x * bx, y: c.y * by, w: c.w * bx, h: c.h * by } : undefined,
     )
   } finally {
     bitmap.close()

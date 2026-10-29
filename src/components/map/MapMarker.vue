@@ -103,7 +103,7 @@ withDefaults(
 }
 .count {
   color: #fff;
-  font-size: 10px;
+  font-size: clamp(7px, calc(var(--d) * 0.62), 10px);
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;

@@ -13,11 +13,13 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import BackupStatusChip from '@/components/common/BackupStatusChip.vue'
 
 /** 首页左侧导览栏 */
-defineProps<{
+const props = defineProps<{
   results: Lineup[]
   /** 当前地图 + 英雄下的 Lineup 总数（不含筛选） */
   total: number
-  activeId: string | null
+  selectedIds: readonly string[]
+  /** 当前地图 + 英雄下被隐藏的 Lineup 数量（手动隐藏 + 失效隐藏） */
+  hiddenCount: number
   mapCounts: Map<string, number>
   agentCounts: Map<string, number>
   typeCounts: Map<string, number>
@@ -30,6 +32,7 @@ const emit = defineEmits<{
   hover: [id: string | null]
   rehearse: [id: string]
   hide: [id: string]
+  unhide: [id: string]
   /** 点击「圈画搜索」：开始 / 取消在地图上圈画 */
   'area-search': []
   collapse: []
@@ -48,6 +51,10 @@ const area = defineModel<Position[] | null>('area', { required: true })
 const areaBy = defineModel<AreaSearchBy>('areaBy', { required: true })
 const areaTarget = computed(() => (areaBy.value === 'landing' ? '落点' : '站位'))
 const hiddenIds = defineModel<string[]>('hiddenIds', { required: true })
+/** 显示隐藏的 Lineup（手动隐藏和失效隐藏） */
+const showHidden = defineModel<boolean>('showHidden', { required: true })
+const hiddenSet = computed(() => new Set(hiddenIds.value))
+const selectedSet = computed(() => new Set(props.selectedIds))
 
 const searchInput = ref<HTMLInputElement>()
 const filtered = computed(
@@ -165,10 +172,17 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
         <template v-if="filtered">{{ results.length }} / {{ total }}</template>
         <template v-else>{{ total }}</template>
       </span>
-      <button v-if="hiddenIds.length" type="button" class="hidden-link" title="显示全部隐藏的 Lineup" @click="hiddenIds = []">
-        <Icon name="eyeOff" :size="13" />
-        已隐藏 {{ hiddenIds.length }}
-      </button>
+      <label v-if="hiddenCount || showHidden" class="hidden-toggle">
+        <button
+          type="button"
+          class="switch switch-sm"
+          role="switch"
+          :aria-checked="showHidden"
+          aria-label="显示隐藏的 Lineup"
+          @click="showHidden = !showHidden"
+        />
+        显示隐藏 {{ hiddenCount }}
+      </label>
       <button v-if="filtered" type="button" class="link" @click="clearFilters">清除筛选</button>
     </div>
 
@@ -178,12 +192,14 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
         :key="l.id"
         role="listitem"
         :lineup="l"
-        :active="l.id === activeId"
+        :selected="selectedSet.has(l.id)"
+        :hidden="hiddenSet.has(l.id)"
         @focus="emit('focus', l.id)"
         @detail="emit('detail', l.id)"
         @hover="(on) => emit('hover', on ? l.id : null)"
         @rehearse="emit('rehearse', l.id)"
         @hide="emit('hide', l.id)"
+        @unhide="emit('unhide', l.id)"
       />
       <div v-if="!results.length" class="empty">
         <template v-if="filtered">
@@ -322,21 +338,20 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
   background: rgb(120 251 231 / 0.14);
   color: var(--text);
 }
-.hidden-link {
+.hidden-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin-left: auto;
-  padding: 0;
-  border: 0;
-  background: none;
   color: var(--text-3);
   font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.hidden-link:hover {
+.hidden-toggle:hover {
   color: var(--text);
 }
-.hidden-link + .link {
+.hidden-toggle + .link {
   margin-left: 8px;
 }
 .search-icon {

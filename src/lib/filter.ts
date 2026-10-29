@@ -1,6 +1,7 @@
 import type { Lineup, Position } from '@/types'
 import { parseDateInput } from './format'
 import { pointInPolygon } from './geometry'
+import { hasPaths } from './paths'
 
 export type TimePreset = 'all' | '7d' | '30d' | '90d' | 'custom'
 
@@ -19,6 +20,29 @@ export const TIME_PRESETS: { value: TimePreset; label: string }[] = [
   { value: 'custom', label: '自定义' },
 ]
 
+/** Lineup 的功能：路径追踪、落点参照、Bug Lineup、失效隐藏 */
+export type LineupFeature = 'paths' | 'landing' | 'bug' | 'invalid'
+
+export const LINEUP_FEATURES: { value: LineupFeature; label: string }[] = [
+  { value: 'paths', label: '路径追踪' },
+  { value: 'landing', label: '落点' },
+  { value: 'bug', label: 'Bug' },
+  { value: 'invalid', label: '失效' },
+]
+
+export function hasFeature(l: Lineup, f: LineupFeature) {
+  switch (f) {
+    case 'paths':
+      return hasPaths(l)
+    case 'landing':
+      return !!l.landing
+    case 'bug':
+      return l.bug
+    case 'invalid':
+      return l.invalid
+  }
+}
+
 export interface LineupFilter {
   /** 为空表示全部 */
   mapId?: string | null
@@ -33,6 +57,10 @@ export interface LineupFilter {
   areaBy?: 'landing' | 'position'
   /** 手动隐藏的 Lineup */
   excludeIds?: readonly string[]
+  /** 不显示标记为「失效隐藏」的 Bug Lineup */
+  hideInvalid?: boolean
+  /** 按功能筛选：具备其中任意一项（为空表示不限） */
+  features?: readonly LineupFeature[]
 }
 
 const DAY = 24 * 60 * 60 * 1000
@@ -113,6 +141,7 @@ export function filterLineups(
   const types = filter.typeIds?.length ? new Set(filter.typeIds) : null
   const excluded = filter.excludeIds?.length ? new Set(filter.excludeIds) : null
   const area = filter.area && filter.area.length >= 3 ? filter.area : null
+  const features = filter.features?.length ? filter.features : null
   const [from, to] = resolveTimeRange(filter.time, now)
   return lineups.filter(
     (l) =>
@@ -120,6 +149,8 @@ export function filterLineups(
       (!filter.agentId || l.agentId === filter.agentId) &&
       (!types || types.has(l.typeId)) &&
       (!excluded || !excluded.has(l.id)) &&
+      (!filter.hideInvalid || !l.invalid) &&
+      (!features || features.some((f) => hasFeature(l, f))) &&
       (from === null || l.createdAt >= from) &&
       (to === null || l.createdAt <= to) &&
       (!area || inArea(l, area, filter.areaBy ?? 'landing')) &&

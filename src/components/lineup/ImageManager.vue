@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { renderAnnotatedThumb } from '@/lib/annotations'
+import { renderAnnotatedThumb, sanitizeCrop } from '@/lib/annotations'
 import { formatBytes, formatMediaCount } from '@/lib/format'
 import {
   isMediaFile,
@@ -13,7 +13,7 @@ import {
 } from '@/lib/image'
 import { usePrefs } from '@/stores/prefs'
 import { useUi } from '@/stores/ui'
-import type { Annotation, ImageSource } from '@/types'
+import type { Annotation, CropRect, ImageSource } from '@/types'
 import Icon from '@/components/common/Icon.vue'
 import MediaThumb from '@/components/media/MediaThumb.vue'
 import { newEditableKey, toSource, type EditableImage } from './editableImages'
@@ -111,15 +111,25 @@ async function addFiles(files: File[]) {
   )
 }
 
-/** 在查看器里给还没保存的图片加标注：更新草稿里的标注，并重新生成带标注的预览图 */
-async function annotateDraft(key: string, annotations: Annotation[]): Promise<ImageSource | null> {
+/** 在查看器里给还没保存的图片加标注 / 裁剪：更新草稿，并重新生成带标注的预览图 */
+async function annotateDraft(
+  key: string,
+  annotations: Annotation[],
+  rawCrop: CropRect | null,
+): Promise<ImageSource | null> {
   const draft = latest.find((i) => i.key === key)?.draft
   if (!draft) throw new Error('这张图片已被移除')
-  const thumb = await renderAnnotatedThumb(draft, annotations)
+  const crop = sanitizeCrop(rawCrop, draft.width, draft.height)
+  const thumb = await renderAnnotatedThumb(draft, annotations, crop)
   // 生成缩略图期间列表可能有变化，以最新的为准
   const item = latest.find((i) => i.key === key)
   if (!item?.draft) throw new Error('这张图片已被移除')
-  const next = { ...item.draft, thumb, annotations: annotations.length ? annotations : undefined }
+  const next = {
+    ...item.draft,
+    thumb,
+    annotations: annotations.length ? annotations : undefined,
+    crop: crop ?? undefined,
+  }
   const updated: EditableImage = { ...item, draft: markRaw(next), previewUrl: URL.createObjectURL(thumb) }
   patch(key, updated)
   // 旧的预览图地址由下面的「释放临时 URL」统一回收
@@ -256,7 +266,7 @@ function openViewer(index: number) {
     Math.max(0, target),
     props.title,
     // 还没保存的图片：标注先存在草稿里，随 Lineup 一起保存
-    { annotateDraft: (i, annotations) => annotateDraft(keys[i]!, annotations) },
+    { annotateDraft: (i, annotations, crop) => annotateDraft(keys[i]!, annotations, crop) },
   )
 }
 

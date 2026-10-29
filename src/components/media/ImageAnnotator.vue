@@ -7,8 +7,10 @@ import {
   hitTest,
   layoutText,
   levelOf,
+  MIN_CROP,
   newAnnotationId,
   plainAnnotations,
+  sanitizeCrop,
   SIZE_LEVELS,
   strokeSize,
   textBackground,
@@ -19,14 +21,15 @@ import {
 } from '@/lib/annotations'
 import { simplifyPath } from '@/lib/geometry'
 import { useUi } from '@/stores/ui'
-import type { Annotation, Position, TextAnnotation } from '@/types'
+import type { Annotation, CropRect, Position, TextAnnotation } from '@/types'
 import Icon from '@/components/common/Icon.vue'
 import type { IconName } from '@/components/common/icons'
 import AnnotationLayer from './AnnotationLayer.vue'
 
 /**
- * 图片标注编辑器（在图片查看器里打开）：画笔、圆圈、箭头、文本框，可以选中后移动 / 删除，支持撤销重做。
- * 保存时把标注交给 save（由查看器写入数据库或草稿），原图不会被修改。
+ * 图片标注编辑器（在图片查看器里打开）：画笔、圆圈、箭头、文本框，可以选中后移动 / 删除，
+ * 还可以裁剪图片，支持撤销重做。
+ * 保存时把标注和裁剪范围交给 save（由查看器写入数据库或草稿），原图不会被修改。
  */
 const props = defineProps<{
   src: string
@@ -34,53 +37,78 @@ const props = defineProps<{
   width: number
   height: number
   annotations: readonly Annotation[]
+  /** 已有的裁剪范围（原图像素） */
+  crop?: CropRect | null
   title?: string
-  save: (annotations: Annotation[]) => Promise<void>
+  save: (annotations: Annotation[], crop: CropRect | null) => Promise<void>
 }>()
 const emit = defineEmits<{ close: [] }>()
 const ui = useUi()
 
-type Tool = 'select' | 'pen' | 'ellipse' | 'arrow' | 'text'
+type Tool = 'select' | 'pen' | 'ellipse' | 'arrow' | 'text' | 'crop'
 const TOOLS: { id: Tool; label: string; icon: IconName; key: string; hint: string }[] = [
   { id: 'select', label: '选择', icon: 'pointer', key: 'V', hint: '点选标注后拖动可以移动，Delete 删除，双击文字可以修改' },
   { id: 'pen', label: '画笔', icon: 'pen', key: 'P', hint: '按住左键拖动，随手圈画' },
   { id: 'ellipse', label: '圆圈', icon: 'circle', key: 'O', hint: '拖动画出圆圈（按住 Shift 为正圆）；单击直接放置一个圆圈' },
   { id: 'arrow', label: '箭头', icon: 'arrowUpRight', key: 'A', hint: '从箭尾拖到箭头指向的位置；单击放置一个指向该处的箭头' },
   { id: 'text', label: '文字', icon: 'type', key: 'T', hint: '单击放置文本框，Enter 完成，Shift + Enter 换行' },
+  { id: 'crop', label: '裁剪', icon: 'crop', key: 'C', hint: '' },
 ]
 
 const tool = ref<Tool>('pen')
 const color = ref<string>(ANNOTATION_COLORS[0])
 const level = ref<SizeLevel>(2)
 const toolHint = computed(() => TOOLS.find((t) => t.id === tool.value)!.hint)
+const cropping = computed(() => tool.value === 'crop')
 
-// ---------- 标注列表与撤销 / 重做 ----------
+// ---------- 标注列表、裁剪范围与撤销 / 重做 ----------
+interface Snapshot {
+  items: Annotation[]
+  crop: CropRect | null
+}
 const items = shallowRef<Annotation[]>(plainAnnotations(props.annotations))
-const history = shallowRef<Annotation[][]>([items.value])
+/** 裁剪范围（原图像素），null 表示不裁剪 */
+const crop = shallowRef<CropRect | null>(sanitizeCrop(props.crop, props.width, props.height))
+const history = shallowRef<Snapshot[]>([{ items: items.value, crop: crop.value }])
 const cursor = ref(0)
-const initialJson = JSON.stringify(items.value)
-const dirty = computed(() => JSON.stringify(items.value) !== initialJson)
+const initialJson = JSON.stringify([items.value, crop.value])
+const dirty = computed(() => JSON.stringify([items.value, crop.value]) !== initialJson)
 const canUndo = computed(() => cursor.value > 0)
 const canRedo = computed(() => cursor.value < history.value.length - 1)
 
-function commit(next: Annotation[]) {
-  history.value = [...history.value.slice(0, cursor.value + 1), next]
+function push(snap: Snapshot) {
+  history.value = [...history.value.slice(0, cursor.value + 1), snap]
   cursor.value = history.value.length - 1
-  items.value = next
+  items.value = snap.items
+  crop.value = snap.crop
+}
+
+function commit(next: Annotation[]) {
+  push({ items: next, crop: crop.value })
+}
+
+function commitCrop(next: CropRect | null) {
+  if (JSON.stringify(next) === JSON.stringify(crop.value)) return
+  push({ items: items.value, crop: next })
+}
+
+function restore() {
+  const snap = history.value[cursor.value]!
+  items.value = snap.items
+  crop.value = snap.crop
+  keepSelection()
 }
 
 function undo() {
   if (!canUndo.value) return
   cursor.value--
-  items.value = history.value[cursor.value]!
-  keepSelection()
+  restore()
 }
 
 function redo() {
   if (!canRedo.value) return
   cursor.value++
-  items.value = history.value[cursor.value]!
-  keepSelection()
+  restore()
 }
 
 function clearAll() {
@@ -198,6 +226,15 @@ function onPointerDown(e: PointerEvent) {
   }
   const p = toImage(e)
   const tol = 6 / scale.value
+  if (tool.value === 'crop') {
+    frame.value!.setPointerCapture(e.pointerId)
+    const rect = cropRect.value
+    let handle = cropHandleAt(p, rect)
+    // 还没有裁剪时，在图片内部拖动是画一个新的裁剪范围（拖图片边缘仍然可以直接调整）
+    if (handle === 'move' && !crop.value) handle = null
+    cropDrag = { pointerId: e.pointerId, handle: handle ?? 'new', start: clampToImage(p), orig: rect }
+    return
+  }
   if (tool.value === 'text') {
     e.preventDefault()
     const hit = hitTest(items.value, p, tol)
@@ -231,6 +268,10 @@ function onPointerDown(e: PointerEvent) {
 }
 
 function onPointerMove(e: PointerEvent) {
+  if (cropDrag) {
+    if (e.pointerId === cropDrag.pointerId) moveCrop(clampToImage(toImage(e)), toImage(e))
+    return
+  }
   const d = drag
   if (!d) {
     hoverCursor(e)
@@ -305,6 +346,17 @@ function clampMove(a: Annotation, dx: number, dy: number): [number, number] {
 }
 
 function onPointerUp(e: PointerEvent) {
+  if (cropDrag) {
+    if (e.pointerId !== cropDrag.pointerId) return
+    const live = cropLive.value
+    cropDrag = null
+    cropLive.value = null
+    if (e.type === 'pointercancel' || !live) return
+    // 太小的范围（例如只是点了一下）不改变裁剪
+    if (live.w < Math.min(MIN_CROP, props.width) || live.h < Math.min(MIN_CROP, props.height)) return
+    commitCrop(sanitizeCrop(live, props.width, props.height))
+    return
+  }
   const d = drag
   if (!d || e.pointerId !== d.pointerId) return
   drag = null
@@ -374,13 +426,97 @@ function onDblClick(e: MouseEvent) {
 }
 
 const cursorStyle = ref('')
+const HANDLE_CURSOR: Record<CropHandle, string> = {
+  nw: 'nwse-resize',
+  se: 'nwse-resize',
+  ne: 'nesw-resize',
+  sw: 'nesw-resize',
+  n: 'ns-resize',
+  s: 'ns-resize',
+  e: 'ew-resize',
+  w: 'ew-resize',
+  move: 'move',
+}
 function hoverCursor(e: PointerEvent) {
+  if (tool.value === 'crop') {
+    const h = cropHandleAt(toImage(e), cropRect.value)
+    cursorStyle.value = h && !(h === 'move' && !crop.value) ? HANDLE_CURSOR[h] : 'crosshair'
+    return
+  }
   if (tool.value !== 'select') {
     cursorStyle.value = ''
     return
   }
   cursorStyle.value = hitTest(items.value, toImage(e), 6 / scale.value) ? 'move' : 'default'
 }
+
+// ---------- 裁剪 ----------
+type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
+const fullRect = computed<CropRect>(() => ({ x: 0, y: 0, w: props.width, h: props.height }))
+/** 拖动中的裁剪范围 */
+const cropLive = shallowRef<CropRect | null>(null)
+/** 裁剪工具显示的范围：拖动中 > 已有的裁剪 > 整张图片 */
+const cropRect = computed(() => cropLive.value ?? crop.value ?? fullRect.value)
+let cropDrag: { pointerId: number; handle: CropHandle | 'new'; start: Position; orig: CropRect } | null = null
+
+/** 点中的裁剪框控制点（四角、四边、内部）；都没点中返回 null */
+function cropHandleAt(p: Position, r: CropRect): CropHandle | null {
+  const tol = 10 / scale.value
+  const nearL = Math.abs(p.x - r.x) <= tol
+  const nearR = Math.abs(p.x - (r.x + r.w)) <= tol
+  const nearT = Math.abs(p.y - r.y) <= tol
+  const nearB = Math.abs(p.y - (r.y + r.h)) <= tol
+  const inX = p.x >= r.x - tol && p.x <= r.x + r.w + tol
+  const inY = p.y >= r.y - tol && p.y <= r.y + r.h + tol
+  if (!inX || !inY) return null
+  if (nearT && nearL) return 'nw'
+  if (nearT && nearR) return 'ne'
+  if (nearB && nearL) return 'sw'
+  if (nearB && nearR) return 'se'
+  if (nearT) return 'n'
+  if (nearB) return 's'
+  if (nearL) return 'w'
+  if (nearR) return 'e'
+  return 'move'
+}
+
+function moveCrop(p: Position, raw: Position) {
+  const d = cropDrag!
+  const o = d.orig
+  const min = Math.min(MIN_CROP, props.width, props.height)
+  if (d.handle === 'new') {
+    cropLive.value = {
+      x: Math.round(Math.min(d.start.x, p.x)),
+      y: Math.round(Math.min(d.start.y, p.y)),
+      w: Math.round(Math.abs(p.x - d.start.x)),
+      h: Math.round(Math.abs(p.y - d.start.y)),
+    }
+    return
+  }
+  if (d.handle === 'move') {
+    const dx = Math.min(props.width - o.x - o.w, Math.max(-o.x, raw.x - d.start.x))
+    const dy = Math.min(props.height - o.y - o.h, Math.max(-o.y, raw.y - d.start.y))
+    cropLive.value = { ...o, x: Math.round(o.x + dx), y: Math.round(o.y + dy) }
+    return
+  }
+  let x1 = o.x
+  let y1 = o.y
+  let x2 = o.x + o.w
+  let y2 = o.y + o.h
+  if (d.handle.includes('w')) x1 = Math.min(p.x, x2 - min)
+  if (d.handle.includes('e')) x2 = Math.max(p.x, x1 + min)
+  if (d.handle.includes('n')) y1 = Math.min(p.y, y2 - min)
+  if (d.handle.includes('s')) y2 = Math.max(p.y, y1 + min)
+  cropLive.value = { x: Math.round(x1), y: Math.round(y1), w: Math.round(x2 - x1), h: Math.round(y2 - y1) }
+}
+
+/** 裁剪框在屏幕上的位置（相对图片框） */
+const cropBox = computed(() => {
+  const r = cropRect.value
+  const k = scale.value
+  return { left: `${r.x * k}px`, top: `${r.y * k}px`, width: `${r.w * k}px`, height: `${r.h * k}px` }
+})
+const showCropMask = computed(() => cropping.value || !!crop.value)
 
 // ---------- 文本框 ----------
 const textEdit = ref<{ id: string | null; x: number; y: number; text: string; color: string; size: number } | null>(
@@ -500,7 +636,7 @@ async function doSave() {
   if (saving.value) return
   saving.value = true
   try {
-    await props.save(plainAnnotations(items.value))
+    await props.save(plainAnnotations(items.value), crop.value)
     emit('close')
   } catch (e) {
     ui.toast(e instanceof Error ? `保存失败：${e.message}` : '保存失败', { kind: 'error' })
@@ -519,8 +655,8 @@ async function requestExit() {
     return
   }
   const r = await ui.choose({
-    title: '保存标注？',
-    message: '标注有修改还没有保存。',
+    title: '保存修改？',
+    message: '标注或裁剪有修改还没有保存。',
     confirmText: '保存',
     altText: '不保存',
     cancelText: '继续编辑',
@@ -623,6 +759,9 @@ const selectionBox = computed(() => {
           <Icon name="trash" :size="17" />
         </button>
         <button type="button" class="tool text-btn" :disabled="!items.length" @click="clearAll">清除全部</button>
+        <button v-if="cropping || crop" type="button" class="tool text-btn" :disabled="!crop" @click="commitCrop(null)">
+          还原裁剪
+        </button>
       </div>
     </div>
 
@@ -649,6 +788,17 @@ const selectionBox = computed(() => {
             :height="selectionBox.h"
           />
         </AnnotationLayer>
+        <div v-if="showCropMask" class="crop-layer" :class="{ active: cropping }">
+          <div class="crop-box" :style="cropBox">
+            <template v-if="cropping">
+              <i class="grid-line v1" />
+              <i class="grid-line v2" />
+              <i class="grid-line h1" />
+              <i class="grid-line h2" />
+              <i v-for="h in ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']" :key="h" class="handle" :class="h" />
+            </template>
+          </div>
+        </div>
         <textarea
           v-if="textEdit && textBox"
           ref="textArea"
@@ -667,8 +817,8 @@ const selectionBox = computed(() => {
     </div>
 
     <p class="hint">
-      {{ toolHint }} · <span class="kbd">Ctrl</span>+<span class="kbd">Z</span> 撤销 ·
-      <span class="kbd">Esc</span> 退出
+      <template v-if="toolHint">{{ toolHint }} · </template>
+      <span class="kbd">Ctrl</span>+<span class="kbd">Z</span> 撤销 · <span class="kbd">Esc</span> 退出
     </p>
   </div>
 </template>
@@ -677,7 +827,8 @@ const selectionBox = computed(() => {
 .annotator {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  /* 盖住查看器浮在图片上的顶栏、左右切换按钮和缩略图条 */
+  z-index: 5;
   display: flex;
   flex-direction: column;
   background: rgb(4 7 10 / 0.97);
@@ -816,6 +967,97 @@ const selectionBox = computed(() => {
 }
 .frame.tool-text {
   cursor: text;
+}
+.frame.tool-crop {
+  cursor: crosshair;
+}
+/* 裁剪：范围外变暗；裁剪工具下显示边框、三分线和控制点 */
+.crop-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.crop-box {
+  position: absolute;
+  box-shadow: 0 0 0 99999px rgb(0 0 0 / 0.6);
+}
+.crop-layer.active .crop-box {
+  outline: 1.5px solid #fff;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.5),
+    0 0 0 99999px rgb(0 0 0 / 0.6);
+}
+.grid-line {
+  position: absolute;
+  background: rgb(255 255 255 / 0.35);
+}
+.grid-line.v1,
+.grid-line.v2 {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.grid-line.v1 {
+  left: 33.333%;
+}
+.grid-line.v2 {
+  left: 66.667%;
+}
+.grid-line.h1,
+.grid-line.h2 {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+.grid-line.h1 {
+  top: 33.333%;
+}
+.grid-line.h2 {
+  top: 66.667%;
+}
+.handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid #fff;
+  border-radius: 2px;
+  background: var(--cyan-dim);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5);
+}
+.handle.nw {
+  left: 0;
+  top: 0;
+}
+.handle.n {
+  left: 50%;
+  top: 0;
+}
+.handle.ne {
+  left: 100%;
+  top: 0;
+}
+.handle.e {
+  left: 100%;
+  top: 50%;
+}
+.handle.se {
+  left: 100%;
+  top: 100%;
+}
+.handle.s {
+  left: 50%;
+  top: 100%;
+}
+.handle.sw {
+  left: 0;
+  top: 100%;
+}
+.handle.w {
+  left: 0;
+  top: 50%;
 }
 .frame img {
   display: block;

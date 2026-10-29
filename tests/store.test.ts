@@ -7,7 +7,7 @@ import { useLineups } from '@/stores/lineups'
 import { resetDBConnection, DB_NAME, getDB } from '@/db/database'
 import { exportBackup, parseBackup } from '@/db/backup'
 import * as repo from '@/db/repo'
-import type { Annotation, Lineup, LineupPath, StoredImage } from '@/types'
+import type { Annotation, Lineup, LineupPath, PathRoute, StoredImage } from '@/types'
 
 function fakeImage(id: string, bytes = 32): StoredImage {
   return {
@@ -160,12 +160,16 @@ describe('lineup store', () => {
 })
 
 const samplePaths: LineupPath[] = [
-  { id: 'p1', name: '', mode: 'knife', points: [{ x: 100, y: 100 }, { x: 800, y: 100 }] },
-  { id: 'p2', name: '静步进点', mode: 'walk', points: [{ x: 800, y: 100 }, { x: 800, y: 500 }, { x: 900, y: 600 }] },
+  { id: 'p1', mode: 'knife', points: [{ x: 100, y: 100 }, { x: 800, y: 100 }] },
+  { id: 'p2', mode: 'walk', points: [{ x: 800, y: 100 }, { x: 800, y: 500 }, { x: 900, y: 600 }] },
+]
+const sampleRoutes: PathRoute[] = [
+  { id: 'r1', name: '', paths: samplePaths },
+  { id: 'r2', name: '静步进点', paths: [samplePaths[1]!] },
 ]
 
 describe('landing reference and paths', () => {
-  it('saves landing and paths, including reactive proxies from the forms', async () => {
+  it('saves landing and path versions, including reactive proxies from the forms', async () => {
     const store = useLineups()
     await store.init()
     const typeId = store.sortedTypes[0]!.id
@@ -179,25 +183,44 @@ describe('landing reference and paths', () => {
       y: 100,
       note: '',
       landing: { x: 1200, y: 300, delay: 2.5 },
-      paths: samplePaths,
+      routes: [...sampleRoutes, { id: 'r3', name: '空', paths: [] }],
     })
     const l = await store.createLineup(draft, [])
     let fromDb = (await repo.loadAll()).lineups[0]!
     expect(fromDb.landing).toEqual({ x: 1200, y: 300, delay: 2.5 })
-    expect(fromDb.paths).toEqual(samplePaths)
+    // 没有路径的版本不保存
+    expect(fromDb.routes).toEqual(sampleRoutes)
+    expect(fromDb).toMatchObject({ bug: false, invalid: false })
 
-    // 详情页修改：换落点、删掉一条路径
-    const form = reactive({ landing: { x: 10, y: 20, delay: null }, paths: [samplePaths[1]!] })
+    // 详情页修改：换落点、删掉第一个版本
+    const form = reactive({ landing: { x: 10, y: 20, delay: null }, routes: [sampleRoutes[1]!] })
     await store.updateLineup(l.id, form)
     fromDb = (await repo.loadAll()).lineups[0]!
     expect(fromDb.landing).toEqual({ x: 10, y: 20, delay: null })
-    expect(fromDb.paths.map((p) => p.id)).toEqual(['p2'])
+    expect(fromDb.routes.map((r) => r.id)).toEqual(['r2'])
 
     // 只改名字时保留落点和路径；关掉落点参照时存为 null
     await store.updateLineup(l.id, { name: '改名' })
-    expect(store.lineupById.get(l.id)?.paths).toHaveLength(1)
+    expect(store.lineupById.get(l.id)?.routes).toHaveLength(1)
     await store.updateLineup(l.id, { landing: null })
     expect((await repo.loadAll()).lineups[0]!.landing).toBeNull()
+  })
+
+  it('saves the bug flag; invalid needs bug', async () => {
+    const store = useLineups()
+    await store.init()
+    const base = { typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' }
+    const a = await store.createLineup({ ...base, name: 'a', bug: true, invalid: true }, [])
+    const b = await store.createLineup({ ...base, name: 'b', invalid: true }, [])
+    expect(store.lineupById.get(a.id)).toMatchObject({ bug: true, invalid: true })
+    expect(store.lineupById.get(b.id)).toMatchObject({ bug: false, invalid: false })
+    // 取消 Bug 时一起取消失效隐藏
+    await store.updateLineup(a.id, { bug: false })
+    expect(store.lineupById.get(a.id)).toMatchObject({ bug: false, invalid: false })
+    await store.updateLineup(a.id, { bug: true })
+    expect(store.lineupById.get(a.id)).toMatchObject({ bug: true, invalid: false })
+    const fromDb = (await repo.loadAll()).lineups.find((l) => l.id === a.id)!
+    expect(fromDb).toMatchObject({ bug: true, invalid: false })
   })
 
   it('reads lineups saved by older versions without landing / paths', async () => {
@@ -220,7 +243,40 @@ describe('landing reference and paths', () => {
     await store.init()
     const l = store.lineupById.get('lu_old')!
     expect(l.landing).toBeNull()
-    expect(l.paths).toEqual([])
+    expect(l.routes).toEqual([])
+    expect(l).toMatchObject({ bug: false, invalid: false })
+  })
+
+  it('converts paths saved by v0.1 into the first route version', async () => {
+    const old = {
+      id: 'lu_v01',
+      name: '旧路径',
+      typeId: 'type_x',
+      agentId: 'brimstone',
+      mapId: 'ascent',
+      x: 1,
+      y: 2,
+      imageIds: [],
+      note: '',
+      landing: null,
+      paths: [{ id: 'p1', name: '路径名', mode: 'knife', points: [{ x: 1, y: 1 }, { x: 9, y: 9 }] }],
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const db = await getDB()
+    await db.put('lineups', old as unknown as Lineup)
+    const store = useLineups()
+    await store.init()
+    const l = store.lineupById.get('lu_v01')!
+    expect(l.routes).toEqual([
+      { id: 'route_1', name: '', paths: [{ id: 'p1', mode: 'knife', points: [{ x: 1, y: 1 }, { x: 9, y: 9 }] }] },
+    ])
+    expect('paths' in l).toBe(false)
+    // 保存一次后按新格式写入
+    await store.updateLineup(l.id, { name: '旧路径2' })
+    const fromDb = (await repo.loadAll()).lineups[0]! as Lineup & { paths?: unknown }
+    expect(fromDb.paths).toBeUndefined()
+    expect(fromDb.routes[0]!.paths[0]!.id).toBe('p1')
   })
 
   it('round-trips landing and paths through a backup', async () => {
@@ -236,14 +292,44 @@ describe('landing reference and paths', () => {
         y: 100,
         note: '',
         landing: { x: 5, y: 6, delay: 1.5 },
-        paths: samplePaths,
+        routes: sampleRoutes,
+        bug: true,
+        invalid: true,
       },
       [],
     )
     const { blob } = await exportBackup()
     await store.clearAll()
     await store.importBackup(await parseBackup(blob), 'replace')
-    expect(store.lineups[0]).toMatchObject({ landing: { x: 5, y: 6, delay: 1.5 }, paths: samplePaths })
+    expect(store.lineups[0]).toMatchObject({
+      landing: { x: 5, y: 6, delay: 1.5 },
+      routes: sampleRoutes,
+      bug: true,
+      invalid: true,
+    })
+  })
+
+  it('imports version 3 backups with a single set of paths', async () => {
+    const json = {
+      format: 'valorant-lineup-notebook',
+      version: 3,
+      exportedAt: 1,
+      types: [{ id: 't1', name: '燃烧弹', color: '#ff5a36', order: 0, createdAt: 1 }],
+      lineups: [
+        {
+          id: 'l1', name: 'v3', typeId: 't1', agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, imageIds: [], note: '',
+          landing: null, paths: [{ id: 'p1', name: 'x', mode: 'walk', points: [{ x: 1, y: 1 }, { x: 5, y: 5 }] }],
+          createdAt: 1, updatedAt: 1,
+        },
+      ],
+      images: [],
+    }
+    const zipped = zipSync({ 'backup.json': strToU8(JSON.stringify(json)) })
+    const parsed = await parseBackup(new Blob([zipped as Uint8Array<ArrayBuffer>]))
+    expect(parsed.lineups[0]!.routes).toEqual([
+      { id: 'route_1', name: '', paths: [{ id: 'p1', mode: 'walk', points: [{ x: 1, y: 1 }, { x: 5, y: 5 }] }] },
+    ])
+    expect(parsed.lineups[0]).toMatchObject({ bug: false, invalid: false })
   })
 
   it('imports version 1 backups (before landing / paths existed)', async () => {
@@ -259,7 +345,7 @@ describe('landing reference and paths', () => {
     }
     const zipped = zipSync({ 'backup.json': strToU8(JSON.stringify(json)) })
     const parsed = await parseBackup(new Blob([zipped as Uint8Array<ArrayBuffer>]))
-    expect(parsed.lineups[0]).toMatchObject({ landing: null, paths: [] })
+    expect(parsed.lineups[0]).toMatchObject({ landing: null, routes: [], bug: false, invalid: false })
   })
 
   it('refuses backups from a newer site version', async () => {
@@ -374,21 +460,33 @@ describe('videos and annotations', () => {
     )
     const newThumb = new Blob([new Uint8Array(20).fill(1)], { type: 'image/webp' })
     const calls: number[] = []
-    await store.annotateImage('img_m', reactive([...sampleAnnotations]), async (img, list) => {
+    const crops: unknown[] = []
+    const render = async (img: { width: number }, list: readonly unknown[], crop: unknown) => {
       calls.push(list.length)
+      crops.push(crop)
       expect(img.width).toBe(1920)
       return newThumb
-    })
+    }
+    await store.annotateImage('img_m', reactive([...sampleAnnotations]), reactive({ x: 100, y: 50, w: 800, h: 450 }), render)
     expect(calls).toEqual([4])
+    expect(crops).toEqual([{ x: 100, y: 50, w: 800, h: 450 }])
     const saved = (await repo.getImage('img_m'))!
     expect(saved.annotations).toEqual(sampleAnnotations)
+    expect(saved.crop).toEqual({ x: 100, y: 50, w: 800, h: 450 })
     expect(saved.thumb.size).toBe(20)
     expect(saved.blob.size).toBe(original.blob.size)
 
-    // 清除全部标注
-    await store.annotateImage('img_m', [], async () => newThumb)
-    expect((await repo.getImage('img_m'))!.annotations).toBeUndefined()
-    await expect(store.annotateImage('vid_3', sampleAnnotations, async () => newThumb)).rejects.toThrow('视频')
-    await expect(store.annotateImage('nope', [], async () => newThumb)).rejects.toThrow()
+    // 裁剪范围随备份导出 / 导入
+    const { blob } = await exportBackup()
+    const parsed = await parseBackup(blob)
+    expect(parsed.images.find((i) => i.id === 'img_m')!.crop).toEqual({ x: 100, y: 50, w: 800, h: 450 })
+
+    // 清除全部标注和裁剪
+    await store.annotateImage('img_m', [], null, async () => newThumb)
+    const cleared = (await repo.getImage('img_m'))!
+    expect(cleared.annotations).toBeUndefined()
+    expect(cleared.crop).toBeUndefined()
+    await expect(store.annotateImage('vid_3', sampleAnnotations, null, async () => newThumb)).rejects.toThrow('视频')
+    await expect(store.annotateImage('nope', [], null, async () => newThumb)).rejects.toThrow()
   })
 })

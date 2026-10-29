@@ -79,13 +79,16 @@ export async function encode(
   h: number,
   quality: number,
   draw?: (ctx: AnyContext2D) => void,
+  /** 只画原图的这一部分（位图像素），用于裁剪 */
+  region?: { x: number; y: number; w: number; h: number },
 ) {
   const canvas = makeCanvas(w, h)
   const ctx = canvas.getContext('2d') as AnyContext2D | null
   if (!ctx) throw new Error('浏览器不支持 Canvas')
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(source, 0, 0, w, h)
+  if (region) ctx.drawImage(source, region.x, region.y, region.w, region.h, 0, 0, w, h)
+  else ctx.drawImage(source, 0, 0, w, h)
   draw?.(ctx)
   return encodeCanvas(canvas, quality)
 }

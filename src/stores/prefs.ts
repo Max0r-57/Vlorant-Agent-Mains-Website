@@ -66,7 +66,7 @@ function load(): Prefs {
   }
 }
 
-export const MARKER_PX: Record<MarkerSize, number> = { sm: 12, md: 16, lg: 20 }
+export const MARKER_PX: Record<MarkerSize, number> = { sm: 8, md: 11, lg: 13 }
 
 export const usePrefs = defineStore('prefs', () => {
   const prefs = reactive<Prefs>(load())

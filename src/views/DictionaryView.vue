@@ -6,19 +6,24 @@ import { MAP_BY_ID, mapName } from '@/data/maps'
 import {
   describeTime,
   filterLineups,
+  hasFeature,
   isTimeActive,
+  LINEUP_FEATURES,
   sortLineups,
   type SortDir,
+  type LineupFeature,
   type SortKey,
   type TimeFilter,
   type TimePreset,
 } from '@/lib/filter'
 import { formatDateTime, formatShort } from '@/lib/format'
+import { hasPaths } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
 import type { Lineup } from '@/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import AgentPicker from '@/components/common/AgentPicker.vue'
+import FeatureFilter from '@/components/common/FeatureFilter.vue'
 import BrandMark from '@/components/common/BrandMark.vue'
 import Icon from '@/components/common/Icon.vue'
 import MapPicker from '@/components/common/MapPicker.vue'
@@ -28,7 +33,7 @@ import TypeFilter from '@/components/common/TypeFilter.vue'
 import LineupThumb from '@/components/lineup/LineupThumb.vue'
 
 /**
- * Lineup 字典：按英雄、地图、关键词、创建时间、类型筛选全部 Lineup，
+ * Lineup 字典：按英雄、地图、关键词、创建时间、类型、功能筛选全部 Lineup，
  * 以类似文件管理器「详细信息」视图的列表展示，点击一行进入详情页。
  * 筛选条件保存在地址栏中，从详情页返回时会保留。
  */
@@ -49,6 +54,12 @@ const agentId = computed(() => (AGENT_BY_ID.has(str(route.query.agent)) ? str(ro
 const mapId = computed(() => (MAP_BY_ID.has(str(route.query.map)) ? str(route.query.map) : null))
 const query = computed(() => str(route.query.q))
 const typeIds = computed(() => str(route.query.types).split(',').filter((t) => store.typeById.has(t)))
+const FEATURE_VALUES = LINEUP_FEATURES.map((f) => f.value)
+const features = computed(() =>
+  str(route.query.feat)
+    .split(',')
+    .filter((f): f is LineupFeature => FEATURE_VALUES.includes(f as LineupFeature)),
+)
 const time = computed<TimeFilter>(() => {
   const preset = str(route.query.time) as TimePreset
   return {
@@ -96,7 +107,15 @@ function search() {
 }
 
 const filtered = computed(
-  () => !!(agentId.value || mapId.value || query.value || typeIds.value.length || isTimeActive(time.value)),
+  () =>
+    !!(
+      agentId.value ||
+      mapId.value ||
+      query.value ||
+      typeIds.value.length ||
+      features.value.length ||
+      isTimeActive(time.value)
+    ),
 )
 
 function reset() {
@@ -110,7 +129,14 @@ const results = computed(() =>
   sortLineups(
     filterLineups(
       store.lineups,
-      { agentId: agentId.value, mapId: mapId.value, query: query.value, typeIds: typeIds.value, time: time.value },
+      {
+        agentId: agentId.value,
+        mapId: mapId.value,
+        query: query.value,
+        typeIds: typeIds.value,
+        time: time.value,
+        features: features.value,
+      },
       ctx,
     ),
     sortKey.value,
@@ -138,21 +164,34 @@ const typeCounts = computed(() => {
   return m
 })
 
+const featureCounts = computed(() => {
+  const m = new Map<LineupFeature, number>()
+  for (const l of store.lineups) {
+    if ((agentId.value && l.agentId !== agentId.value) || (mapId.value && l.mapId !== mapId.value)) continue
+    for (const f of FEATURE_VALUES) if (hasFeature(l, f)) m.set(f, (m.get(f) ?? 0) + 1)
+  }
+  return m
+})
+
 const summary = computed(() => {
   const parts: string[] = []
   if (agentId.value) parts.push(agentName(agentId.value))
   if (mapId.value) parts.push(mapName(mapId.value))
   if (typeIds.value.length) parts.push(typeIds.value.map((t) => store.typeName(t)).join('、'))
+  if (features.value.length) {
+    parts.push(LINEUP_FEATURES.filter((f) => features.value.includes(f.value)).map((f) => f.label).join('、'))
+  }
   if (isTimeActive(time.value)) parts.push(describeTime(time.value))
   if (query.value) parts.push(`“${query.value}”`)
   return parts.join(' · ')
 })
 
-const columns: { key: SortKey; label: string }[] = [
+const columns: { key: SortKey | 'features'; label: string }[] = [
   { key: 'name', label: '名称' },
   { key: 'agent', label: '英雄' },
   { key: 'map', label: '地图' },
   { key: 'type', label: '类型' },
+  { key: 'features', label: '功能' },
   { key: 'createdAt', label: '创建时间' },
 ]
 
@@ -167,11 +206,7 @@ const preview = computed(() => hovered.value ?? results.value[0] ?? null)
 
 function openImages(l: Lineup) {
   if (!l.imageIds.length) return
-  ui.openLightbox(
-    l.imageIds.map((id) => ({ kind: 'stored' as const, id })),
-    0,
-    l.name,
-  )
+  ui.openLineupImages(results.value, l.id)
 }
 </script>
 
@@ -229,6 +264,11 @@ function openImages(l: Lineup) {
           :counts="typeCounts"
           @update:model-value="(v) => update({ types: v.join(',') })"
         />
+        <FeatureFilter
+          :model-value="features"
+          :counts="featureCounts"
+          @update:model-value="(v) => update({ feat: v.join(',') })"
+        />
         <button type="button" class="btn btn-primary" @click="search">
           <Icon name="search" :size="16" />
           搜索
@@ -254,23 +294,27 @@ function openImages(l: Lineup) {
 
         <div class="table" role="table" aria-label="Lineup 列表">
           <div class="row head" role="row">
-            <button
-              v-for="c in columns"
-              :key="c.key"
-              type="button"
-              class="cell th"
-              :class="[`col-${c.key}`, { sorted: sortKey === c.key }]"
-              role="columnheader"
-              :aria-sort="sortKey === c.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'"
-              @click="sortBy(c.key)"
-            >
-              {{ c.label }}
-              <Icon
-                v-if="sortKey === c.key"
-                :name="sortDir === 'asc' ? 'arrowUp' : 'arrowDown'"
-                :size="13"
-              />
-            </button>
+            <template v-for="c in columns" :key="c.key">
+              <span v-if="c.key === 'features'" class="cell th static-th col-features" role="columnheader">
+                {{ c.label }}
+              </span>
+              <button
+                v-else
+                type="button"
+                class="cell th"
+                :class="[`col-${c.key}`, { sorted: sortKey === c.key }]"
+                role="columnheader"
+                :aria-sort="sortKey === c.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'"
+                @click="sortBy(c.key)"
+              >
+                {{ c.label }}
+                <Icon
+                  v-if="sortKey === c.key"
+                  :name="sortDir === 'asc' ? 'arrowUp' : 'arrowDown'"
+                  :size="13"
+                />
+              </button>
+            </template>
           </div>
 
           <RouterLink
@@ -302,6 +346,15 @@ function openImages(l: Lineup) {
             </span>
             <span class="cell col-map ellipsis" role="cell">{{ mapName(l.mapId) }}</span>
             <span class="cell col-type" role="cell"><TypeBadge :type-id="l.typeId" size="sm" /></span>
+            <span class="cell col-features" role="cell">
+              <span v-if="hasPaths(l)" class="feat path">
+                <Icon name="route" :size="12" />
+                路径追踪<template v-if="l.routes.length > 1"> ×{{ l.routes.length }}</template>
+              </span>
+              <span v-if="l.landing" class="feat landing"><Icon name="target" :size="12" />落点</span>
+              <span v-if="l.bug" class="feat bug">BUG</span>
+              <span v-if="l.invalid" class="feat invalid">失效</span>
+            </span>
             <span class="cell col-createdAt tabular" role="cell">
               <span class="date-full">{{ formatDateTime(l.createdAt) }}</span>
               <span class="date-short">{{ formatShort(l.createdAt) }}</span>
@@ -463,9 +516,11 @@ function openImages(l: Lineup) {
 }
 .row {
   display: grid;
-  grid-template-columns: minmax(220px, 3fr) minmax(110px, 1fr) minmax(100px, 1fr) minmax(110px, 1fr) minmax(150px, 1.1fr);
+  grid-template-columns:
+    minmax(220px, 3fr) minmax(110px, 1fr) minmax(100px, 1fr) minmax(110px, 1fr) minmax(150px, 1.3fr)
+    minmax(150px, 1.1fr);
   align-items: center;
-  min-width: 720px;
+  min-width: 870px;
 }
 .head {
   position: sticky;
@@ -497,6 +552,46 @@ function openImages(l: Lineup) {
 }
 .th.sorted {
   color: var(--cyan);
+}
+.static-th,
+.static-th:hover {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  color: var(--text-2);
+}
+.col-features {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.feat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.feat.path {
+  border-color: rgb(61 139 255 / 0.5);
+  color: #7cb2ff;
+}
+.feat.landing {
+  border-color: rgb(255 138 112 / 0.5);
+  color: #ff8a70;
+}
+.feat.bug {
+  border-color: rgb(255 176 32 / 0.55);
+  color: #ffb020;
+}
+.feat.invalid {
+  border-color: rgb(255 92 92 / 0.55);
+  color: var(--danger);
 }
 .item {
   min-height: 48px;
@@ -654,6 +749,7 @@ function openImages(l: Lineup) {
   }
   .col-map,
   .col-type,
+  .col-features,
   .col-agent .ellipsis,
   .date-full {
     display: none;

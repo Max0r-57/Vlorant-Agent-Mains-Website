@@ -6,16 +6,16 @@ import { landingSpec } from '@/data/landing'
 import { MAP_BY_ID } from '@/data/maps'
 import { computePosition } from '@/lib/floating'
 import type { MapMetric } from '@/lib/geometry'
-import { buildRoute, formatDuration } from '@/lib/rehearsal'
 import { useLineups } from '@/stores/lineups'
 import { usePrefs } from '@/stores/prefs'
 import { useUi } from '@/stores/ui'
-import type { Landing, Lineup, LineupPath, Position } from '@/types'
+import type { Landing, Lineup, PathRoute, Position } from '@/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import Icon from '@/components/common/Icon.vue'
 import TypePicker from '@/components/common/TypePicker.vue'
 import DelayInput from './DelayInput.vue'
 import ImageManager from './ImageManager.vue'
+import RouteChips from './RouteChips.vue'
 import { collectForSave, hasPendingImages, type EditableImage } from './editableImages'
 
 /**
@@ -33,7 +33,10 @@ const props = defineProps<{
   stackCount?: number
   /** 落点参照（未开启时为 null） */
   landing: Landing | null
-  paths: LineupPath[]
+  /** 路径版本 */
+  routes: PathRoute[]
+  /** 地图上显示的版本 */
+  routeIndex: number
   showPaths: boolean
   metric: MapMetric
   /** 编辑路径或现场演练时暂时隐藏（保留已填写的内容） */
@@ -46,8 +49,9 @@ const emit = defineEmits<{
   'toggle-landing': [on: boolean]
   'update:landing': [landing: Landing]
   'update:showPaths': [value: boolean]
-  /** 增加路径追踪 / 新增路径：进入路径编辑模式 */
-  'edit-paths': []
+  /** 进入路径编辑模式：编辑第 index 个版本，null 表示新增版本 */
+  'edit-route': [index: number | null]
+  'remove-route': [index: number]
 }>()
 
 const store = useLineups()
@@ -62,6 +66,8 @@ const typeId = ref<string | null>(
 )
 const note = ref('')
 const images = ref<EditableImage[]>([])
+const bug = ref(false)
+const invalid = ref(false)
 const saving = ref(false)
 const tried = ref(false)
 
@@ -71,10 +77,10 @@ const nameError = computed(() => (tried.value && !name.value.trim() ? '请填写
 const typeError = computed(() => (tried.value && !typeId.value ? '请选择或新建一个类型' : ''))
 const processing = computed(() => hasPendingImages(images.value))
 const dirty = computed(
-  () => !!(name.value.trim() || note.value.trim() || images.value.length || props.landing || props.paths.length),
+  () =>
+    !!(name.value.trim() || note.value.trim() || images.value.length || props.landing || props.routes.length || bug.value),
 )
 const spec = computed(() => landingSpec(props.agentId))
-const routeTime = computed(() => buildRoute(props.paths, props.metric).duration)
 
 function setDelay(delay: number | null) {
   if (props.landing) emit('update:landing', { ...props.landing, delay })
@@ -155,7 +161,9 @@ async function save() {
         y: props.pos.y,
         note: note.value.trim(),
         landing: props.landing,
-        paths: props.paths,
+        routes: props.routes,
+        bug: bug.value,
+        invalid: bug.value && invalid.value,
       },
       newImages,
     )
@@ -291,17 +299,12 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
               <span class="extra-title">
                 <Icon name="route" :size="15" />
                 路径追踪
-                <span v-if="paths.length" class="extra-meta tabular">
-                  {{ paths.length }} 条 · 约 {{ formatDuration(routeTime) }}
-                </span>
               </span>
-              <button v-if="!paths.length" type="button" class="btn btn-sm btn-outline" @click="emit('edit-paths')">
+              <button v-if="!routes.length" type="button" class="btn btn-sm btn-outline" @click="emit('edit-route', null)">
                 <Icon name="plus" :size="14" />
                 增加路径追踪
               </button>
-            </div>
-            <div v-if="paths.length" class="extra-row path-actions">
-              <label class="inline-switch">
+              <label v-else class="inline-switch">
                 <button
                   type="button"
                   class="switch"
@@ -312,10 +315,43 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
                 />
                 显示路径
               </label>
-              <button type="button" class="btn btn-sm btn-outline" @click="emit('edit-paths')">
-                <Icon name="plus" :size="14" />
-                新增
-              </button>
+            </div>
+            <RouteChips
+              v-if="routes.length"
+              :routes="routes"
+              :active="routeIndex"
+              :metric="metric"
+              @edit="(i) => emit('edit-route', i)"
+              @add="emit('edit-route', null)"
+              @remove="(i) => emit('remove-route', i)"
+            />
+          </div>
+
+          <div class="extra">
+            <div class="extra-row">
+              <span class="extra-title">
+                <Icon name="bug" :size="15" />
+                Bug Lineup
+              </span>
+              <button
+                type="button"
+                class="switch"
+                role="switch"
+                :aria-checked="bug"
+                aria-label="Bug Lineup"
+                @click="bug = !bug"
+              />
+            </div>
+            <div v-if="bug" class="extra-row">
+              <span class="extra-sub">失效隐藏</span>
+              <button
+                type="button"
+                class="switch"
+                role="switch"
+                :aria-checked="invalid"
+                aria-label="失效隐藏"
+                @click="invalid = !invalid"
+              />
             </div>
           </div>
         </div>
@@ -451,8 +487,9 @@ defineExpose({ rect: () => (props.hidden ? null : (panel.value?.getBoundingClien
 .extra-title :deep(.icon) {
   color: var(--text-3);
 }
-.extra-meta {
-  color: #7cb2ff;
+.extra-sub {
+  padding-left: 21px;
+  color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
 }

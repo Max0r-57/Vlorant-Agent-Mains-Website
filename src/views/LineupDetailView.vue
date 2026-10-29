@@ -4,10 +4,10 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { AGENT_BY_ID } from '@/data/agents'
 import { MAP_BY_ID } from '@/data/maps'
 import { formatDateTime } from '@/lib/format'
-import { plainLanding, plainPaths } from '@/lib/paths'
+import { plainLanding, plainRoutes } from '@/lib/paths'
 import { useLineups } from '@/stores/lineups'
 import { useUi } from '@/stores/ui'
-import type { Landing, Lineup, LineupPath, Position } from '@/types'
+import type { Landing, Lineup, PathRoute, Position } from '@/types'
 import AgentPicker from '@/components/common/AgentPicker.vue'
 import BrandMark from '@/components/common/BrandMark.vue'
 import Icon from '@/components/common/Icon.vue'
@@ -38,7 +38,9 @@ interface Form {
   pos: Position
   note: string
   landing: Landing | null
-  paths: LineupPath[]
+  routes: PathRoute[]
+  bug: boolean
+  invalid: boolean
 }
 const form = reactive<Form>({
   name: '',
@@ -48,7 +50,9 @@ const form = reactive<Form>({
   pos: { x: 0, y: 0 },
   note: '',
   landing: null,
-  paths: [],
+  routes: [],
+  bug: false,
+  invalid: false,
 })
 const images = ref<EditableImage[]>([])
 const positionEditor = ref<InstanceType<typeof PositionEditor>>()
@@ -67,7 +71,9 @@ function snapshot() {
     y: form.pos.y,
     note: form.note,
     landing: plainLanding(form.landing),
-    paths: plainPaths(form.paths),
+    routes: plainRoutes(form.routes),
+    bug: form.bug,
+    invalid: form.bug && form.invalid,
     images: images.value.map((i) => i.storedId ?? i.key),
   })
 }
@@ -81,7 +87,9 @@ function load(l: Lineup | undefined) {
   form.pos = { x: l.x, y: l.y }
   form.note = l.note
   form.landing = plainLanding(l.landing)
-  form.paths = plainPaths(l.paths)
+  form.routes = plainRoutes(l.routes)
+  form.bug = l.bug
+  form.invalid = l.invalid
   images.value = fromStored(l.imageIds)
   tried.value = false
   baseline.value = snapshot()
@@ -129,7 +137,9 @@ async function save() {
         y: form.pos.y,
         note: form.note.trim(),
         landing: form.landing,
-        paths: form.paths,
+        routes: form.routes,
+        bug: form.bug,
+        invalid: form.bug && form.invalid,
       },
       collectForSave(images.value),
     )
@@ -299,6 +309,31 @@ watch(
               <span class="static-value tabular">{{ formatDateTime(lineup.updatedAt) }}</span>
             </div>
           </div>
+          <div class="flag-row">
+            <label class="inline-switch">
+              <button
+                type="button"
+                class="switch"
+                role="switch"
+                :aria-checked="form.bug"
+                aria-label="Bug Lineup"
+                @click="form.bug = !form.bug"
+              />
+              <Icon name="bug" :size="15" />
+              Bug Lineup
+            </label>
+            <label v-if="form.bug" class="inline-switch">
+              <button
+                type="button"
+                class="switch"
+                role="switch"
+                :aria-checked="form.invalid"
+                aria-label="失效隐藏"
+                @click="form.invalid = !form.invalid"
+              />
+              失效隐藏
+            </label>
+          </div>
         </div>
         <button type="button" class="btn btn-outline map-link" @click="showOnMap">
           <Icon name="pin" :size="16" />
@@ -338,7 +373,7 @@ watch(
           v-model:map-id="form.mapId"
           v-model:pos="form.pos"
           v-model:landing="form.landing"
-          v-model:paths="form.paths"
+          v-model:routes="form.routes"
           :lineup="lineup"
           :lineup-name="form.name"
           :agent-id="form.agentId"
@@ -519,6 +554,25 @@ watch(
   gap: 12px 20px;
   align-items: end;
   margin-top: 6px;
+}
+.flag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  margin-top: 4px;
+}
+.inline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inline-switch :deep(.icon) {
+  color: var(--text-3);
 }
 .static-value {
   display: flex;

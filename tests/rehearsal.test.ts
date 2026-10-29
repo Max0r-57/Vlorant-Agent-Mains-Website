@@ -17,7 +17,7 @@ import type { LineupPath } from '@/types'
 const metric = mapMetric(100)
 
 function path(id: string, mode: string, pts: [number, number][]): LineupPath {
-  return { id, name: '', mode, points: pts.map(([x, y]) => ({ x, y })) }
+  return { id, mode, points: pts.map(([x, y]) => ({ x, y })) }
 }
 
 describe('movement speeds', () => {
@@ -28,7 +28,7 @@ describe('movement speeds', () => {
     expect(moveSpeed('ares')).toBe(5.13)
     expect(moveSpeed('vandal')).toBe(5.4)
     expect(moveSpeed('classic')).toBe(5.73)
-    expect(MOVE_MODE_BY_ID.get('odin')?.label).toBe('持奥丁跑')
+    expect(MOVE_MODE_BY_ID.get('odin')?.label).toBe('奥丁')
     expect(new Set(MOVE_MODES.map((m) => m.id)).size).toBe(MOVE_MODES.length)
   })
 })

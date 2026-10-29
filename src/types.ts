@@ -19,15 +19,22 @@ export interface Landing extends Position {
   delay: number | null
 }
 
-/** 路径追踪中的一条路径 */
+/** 路径追踪中的一段路径（每段只记录行走方式，不单独命名） */
 export interface LineupPath {
   id: string
-  /** 路径名称；为空时显示默认名称「路径 N」（N 为序号） */
-  name: string
   /** 行走方式 id（见 src/data/movement.ts），未选择时为空字符串 */
   mode: string
   /** 沿路径依次经过的点（地图坐标），至少两个 */
   points: Position[]
+}
+
+/** 路径追踪的一个版本：由若干段路径组成，可以命名；现场演练时选择用哪个版本 */
+export interface PathRoute {
+  id: string
+  /** 版本名称；为空时显示「版本 N」 */
+  name: string
+  /** 各段路径，数组顺序就是行走顺序 */
+  paths: LineupPath[]
 }
 
 export interface Lineup extends Position {
@@ -42,8 +49,12 @@ export interface Lineup extends Position {
   note: string
   /** 落点参照，未开启时为 null */
   landing: Landing | null
-  /** 行走路径，数组顺序就是序号（第 1 条路径在最前） */
-  paths: LineupPath[]
+  /** 路径追踪的各个版本，第一个是默认版本（地图上默认显示它） */
+  routes: PathRoute[]
+  /** Bug Lineup（利用游戏 bug 的点位） */
+  bug: boolean
+  /** 已失效：默认隐藏，打开导览栏的「显示隐藏」才显示 */
+  invalid: boolean
   /** 创建时间 createDate（毫秒时间戳） */
   createdAt: number
   updatedAt: number
@@ -82,14 +93,27 @@ export interface StoredImage {
   duration?: number
   /** 图片上的标注（原图像素坐标），原图本身不会被修改 */
   annotations?: Annotation[]
+  /** 图片的裁剪范围（原图像素坐标），原图本身不会被修改；不填表示不裁剪 */
+  crop?: CropRect
+}
+
+/** 裁剪范围（原图像素） */
+export interface CropRect {
+  x: number
+  y: number
+  w: number
+  h: number
 }
 
 /** 新建 / 编辑时，尚未写入数据库的图片 */
 export type NewImage = StoredImage
 
 /** 新建 / 修改时提交的字段；落点和路径可以省略（默认没有） */
-export type LineupDraft = Omit<Lineup, 'id' | 'createdAt' | 'updatedAt' | 'imageIds' | 'landing' | 'paths'> &
-  Partial<Pick<Lineup, 'landing' | 'paths'>>
+export type LineupDraft = Omit<
+  Lineup,
+  'id' | 'createdAt' | 'updatedAt' | 'imageIds' | 'landing' | 'routes' | 'bug' | 'invalid'
+> &
+  Partial<Pick<Lineup, 'landing' | 'routes' | 'bug' | 'invalid'>>
 
 /**
  * 查看器里的媒体来源：已保存的用 id（类型、尺寸、标注从数据库读取）；
@@ -106,6 +130,7 @@ export type ImageSource =
       width?: number
       height?: number
       annotations?: readonly Annotation[]
+      crop?: CropRect
     }
 
 /** 图片标注（坐标为原图像素），见 src/lib/annotations.ts */

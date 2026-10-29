@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { createPathEditor } from '@/composables/usePathEditor'
-import { pathName } from '@/lib/paths'
 
 const line = (x: number) => [
   { x, y: 0 },
@@ -36,17 +35,29 @@ describe('path editor', () => {
     expect(ed.paths.map((p) => p.id)).toEqual([c.id, b.id, a.id])
   })
 
-  it('treats the default name as unnamed so it follows the order', () => {
+  it('names the route version; the default name counts as unnamed', () => {
     const ed = createPathEditor()
-    ed.start([])
-    const a = ed.addStroke(line(0))
-    const b = ed.addStroke(line(100))
-    ed.setName(a.id, '路径1')
-    ed.setName(b.id, '  转点 ')
-    expect(ed.paths[0]!.name).toBe('')
-    expect(ed.paths[1]!.name).toBe('转点')
-    ed.setOrder(a.id, 2)
-    expect(ed.paths.map((p, i) => pathName(p, i))).toEqual(['转点', '路径2'])
+    ed.start([], null, { index: 1 })
+    expect(ed.title).toBe('版本2')
+    ed.setName('版本2')
+    expect(ed.name).toBe('')
+    ed.setName('  快速转点 ')
+    expect(ed.name).toBe('快速转点')
+    expect(ed.title).toBe('快速转点')
+    expect(ed.dirty).toBe(true)
+    ed.setName('x'.repeat(40))
+    expect(ed.name).toHaveLength(20)
+  })
+
+  it('loads the version name and tracks renames as changes', () => {
+    const ed = createPathEditor()
+    ed.start([{ id: 'p1', mode: 'knife', points: line(0) }], null, { name: ' 默认 ', index: 0 })
+    expect(ed.name).toBe('默认')
+    expect(ed.dirty).toBe(false)
+    ed.setName('新名字')
+    expect(ed.dirty).toBe(true)
+    ed.setName('默认')
+    expect(ed.dirty).toBe(false)
   })
 
   it('redraws the latest path: goes back to the previous one and reuses the info', () => {
@@ -56,12 +67,11 @@ describe('path editor', () => {
     ed.setMode(a.id, 'knife')
     const b = ed.addStroke(line(100))
     ed.setMode(b.id, 'walk')
-    ed.setName(b.id, '静步进点')
     ed.redraw()
     expect(ed.paths.map((p) => p.id)).toEqual([a.id])
     expect(ed.selectedId).toBe(a.id)
     const again = ed.addStroke(line(300))
-    expect(again).toMatchObject({ name: '静步进点', mode: 'walk' })
+    expect(again).toMatchObject({ mode: 'walk' })
     expect(ed.paths.map((p) => p.id)).toEqual([a.id, again.id])
   })
 
@@ -84,9 +94,9 @@ describe('path editor', () => {
   it('does nothing when redrawing without a drawn path', () => {
     const ed = createPathEditor()
     ed.start([])
-    ed.setName(null, '起步')
+    ed.setMode(null, 'walk')
     ed.redraw()
-    expect(ed.pending.name).toBe('起步')
+    expect(ed.pending.mode).toBe('walk')
     expect(ed.paths).toHaveLength(0)
   })
 
@@ -98,7 +108,7 @@ describe('path editor', () => {
     ed.setMode(a.id, 'knife')
     const b = ed.addStroke(line(100))
     ed.select(a.id)
-    expect(ed.validate()).toBe('请为「路径2」选择行走方式')
+    expect(ed.validate()).toBe('请为第 2 段路径选择行走方式')
     expect(ed.selectedId).toBe(b.id)
     ed.setMode(b.id, 'walk')
     expect(ed.validate()).toBeNull()
@@ -107,7 +117,7 @@ describe('path editor', () => {
 
   it('loads existing paths and allows removing all of them', () => {
     const ed = createPathEditor()
-    ed.start([{ id: 'p1', name: '', mode: 'knife', points: line(0) }], 'p1')
+    ed.start([{ id: 'p1', mode: 'knife', points: line(0) }], 'p1')
     expect(ed.selectedId).toBe('p1')
     expect(ed.dirty).toBe(false)
     ed.remove('p1')
