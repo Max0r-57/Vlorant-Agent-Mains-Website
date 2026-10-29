@@ -3,6 +3,7 @@
  *
  * 新增地图：把俯瞰图放进 src/assets/maps/，文件名与 id 一致（如 bind.webp，png / jpg 也可以），
  * 然后在下面的列表里加一行即可。数组顺序就是下拉菜单里的顺序。
+ * 地图预览图（地图选择栏和下拉菜单的背景）放进 src/assets/map-previews/，同样以 id 命名，没有时用俯瞰图代替。
  */
 export interface MapDef {
   id: string
@@ -10,8 +11,10 @@ export interface MapDef {
   name: string
   /** 英文名（可选，仅用于展示和搜索） */
   en?: string
-  /** 图片地址（自动根据 id 匹配） */
+  /** 俯瞰图地址（自动根据 id 匹配） */
   image: string
+  /** 预览图地址（地图选择栏的背景，自动根据 id 匹配；没有预览图时为 undefined） */
+  preview?: string
   /** 图片宽度对应的游戏内距离（米），不填则使用 DEFAULT_MAP_WIDTH_METERS */
   widthMeters?: number
 }
@@ -27,7 +30,7 @@ export interface MapDef {
  */
 export const DEFAULT_MAP_WIDTH_METERS = 141.7
 
-const MAP_LIST: Omit<MapDef, 'image'>[] = [
+const MAP_LIST: Omit<MapDef, 'image' | 'preview'>[] = [
   { id: 'ascent', name: '亚海悬城', en: 'Ascent' },
   { id: 'haven', name: '隐世修所', en: 'Haven' },
   { id: 'split', name: '霓虹町', en: 'Split' },
@@ -51,11 +54,18 @@ function stemOf(path: string) {
   return path.slice(path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '')
 }
 
+const previews = import.meta.glob<string>('../assets/map-previews/*.{png,jpg,jpeg,webp}', {
+  eager: true,
+  import: 'default',
+})
+
 const imageById = new Map(Object.entries(images).map(([path, url]) => [stemOf(path), url]))
+const previewById = new Map(Object.entries(previews).map(([path, url]) => [stemOf(path), url]))
 
 export const MAPS: MapDef[] = MAP_LIST.filter((m) => imageById.has(m.id)).map((m) => ({
   ...m,
   image: imageById.get(m.id)!,
+  preview: previewById.get(m.id),
 }))
 
 export const MAP_BY_ID = new Map(MAPS.map((m) => [m.id, m]))

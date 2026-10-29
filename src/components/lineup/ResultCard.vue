@@ -8,12 +8,13 @@ import TypeBadge from '@/components/common/TypeBadge.vue'
 import LineupThumb from './LineupThumb.vue'
 
 /**
- * 导览栏搜索结果卡片：点击卡片选中 / 取消选中（选中时在地图上定位），点「详情」进入详情页；
+ * 导览栏搜索结果卡片：点击卡片选中并在地图上定位（按住 Ctrl / ⌘ 点击为多选），点「详情」进入详情页；
  * 有路径时可以「现场演练」；右上角的小方框隐藏这个 Lineup（已隐藏时为取消隐藏）。
  */
 defineProps<{ lineup: Lineup; selected?: boolean; hidden?: boolean }>()
 const emit = defineEmits<{
-  focus: []
+  /** multi：按住 Ctrl / ⌘ 点击（多选） */
+  focus: [multi: boolean]
   detail: []
   hover: [on: boolean]
   rehearse: []
@@ -31,9 +32,9 @@ const store = useLineups()
     role="button"
     :aria-pressed="!!selected"
     :aria-label="lineup.name"
-    @click="emit('focus')"
-    @keydown.enter.self="emit('focus')"
-    @keydown.space.self.prevent="emit('focus')"
+    @click="(e) => emit('focus', e.ctrlKey || e.metaKey)"
+    @keydown.enter.self="(e) => emit('focus', e.ctrlKey || e.metaKey)"
+    @keydown.space.self.prevent="(e) => emit('focus', e.ctrlKey || e.metaKey)"
     @pointerenter="emit('hover', true)"
     @pointerleave="emit('hover', false)"
   >

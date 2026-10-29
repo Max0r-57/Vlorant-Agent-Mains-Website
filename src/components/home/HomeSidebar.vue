@@ -27,7 +27,8 @@ const props = defineProps<{
   lassoActive?: boolean
 }>()
 const emit = defineEmits<{
-  focus: [id: string]
+  /** 点击结果卡片；multi 为按住 Ctrl / ⌘ 多选 */
+  focus: [id: string, multi: boolean]
   detail: [id: string]
   hover: [id: string | null]
   rehearse: [id: string]
@@ -194,7 +195,7 @@ defineExpose({ focusSearch: () => searchInput.value?.focus() })
         :lineup="l"
         :selected="selectedSet.has(l.id)"
         :hidden="hiddenSet.has(l.id)"
-        @focus="emit('focus', l.id)"
+        @focus="(multi) => emit('focus', l.id, multi)"
         @detail="emit('detail', l.id)"
         @hover="(on) => emit('hover', on ? l.id : null)"
         @rehearse="emit('rehearse', l.id)"

@@ -26,7 +26,7 @@ interface ConfirmState extends ConfirmOptions {
   resolve: (result: ConfirmResult) => void
 }
 
-/** 查看器里可以连续查看的一组 Lineup（看完一个 Lineup 的最后一张图片后切换到下一个） */
+/** 查看器里可以连续查看的一组 Lineup（同一位置的多个 Lineup：看完一个的最后一张图片后切换到下一个） */
 export interface LightboxGroup {
   title: string
   sources: ImageSource[]
@@ -70,8 +70,8 @@ export const useUi = defineStore('ui', () => {
   }
 
   /**
-   * 查看某个 Lineup 的图片 / 视频；list 是它所在的列表（导览栏的结果、字典的列表……），
-   * 看到最后一张时可以切换到列表里的下一个有图片的 Lineup。
+   * 查看某个 Lineup 的图片 / 视频；list 是可以连续查看的 Lineup（同一位置的多个 Lineup），
+   * 看到最后一张时可以切换到列表里的下一个有图片的 Lineup。只有它自己时就是普通的查看。
    */
   function openLineupImages(list: readonly Lineup[], id: string, index = 0) {
     const withImages = list.filter((l) => l.imageIds.length || l.id === id)
@@ -82,7 +82,7 @@ export const useUi = defineStore('ui', () => {
     const at = withImages.findIndex((l) => l.id === id)
     const group = groups[at]
     if (!group?.sources.length) return
-    openLightbox(group.sources, index, group.title, { sequence: { groups, index: at } })
+    openLightbox(group.sources, index, group.title, groups.length > 1 ? { sequence: { groups, index: at } } : {})
   }
 
   function closeLightbox() {

@@ -137,7 +137,7 @@ const hoverResultKey = ref<string | null>(null)
 /**
  * 选中的 Lineup（可以多选）：
  * - 关键词搜索 / 圈画搜索后自动选中全部结果；
- * - 点击导览栏的卡片选中，再次点击取消选中；
+ * - 点击导览栏的卡片只选中它；按住 Ctrl（Mac 为 ⌘）点击卡片可以多选，再按住 Ctrl 点击取消选中；
  * - 点击圆点选中该位置的 Lineup（同一位置有多个时，在预览卡片里点击卡片选中）；
  * - 按住 Ctrl（Mac 为 ⌘）点击圆点可以多选。
  * 点击地图空白处只收起预览卡片，选中状态保留，地图上继续显示它们的站位、落点和路径，
@@ -240,16 +240,21 @@ function focusLineup(id: string) {
   if (drawerSidebar.value) prefs.sidebarOpen = false
 }
 
-/** 点击导览栏的卡片：选中并在地图上定位；再次点击取消选中 */
-function onResultClick(id: string) {
-  if (selectedSet.value.has(id) && mode.value === 'normal') {
+/**
+ * 点击导览栏的卡片：只选中这一个并在地图上定位；
+ * multi（按住 Ctrl / ⌘）时加入选中，已选中的则取消选中。
+ */
+function onResultClick(id: string, multi = false) {
+  if (multi && selectedSet.value.has(id) && mode.value === 'normal') {
     toggleSelected(id)
     const l = store.lineupById.get(id)
     if (l && pop.state.value?.key === posKey(l)) pop.close()
     return
   }
   focusLineup(id)
-  if (mode.value === 'normal' && !selectedSet.value.has(id)) toggleSelected(id)
+  if (mode.value !== 'normal') return
+  if (multi) toggleSelected(id)
+  else selectedIds.value = [id]
 }
 
 function openDetail(id: string) {
@@ -1005,7 +1010,6 @@ const mapPadding = computed(() =>
       show-rehearse
       selectable
       :selected-ids="selectedIds"
-      :sequence="results"
       @select="toggleSelected"
       @enter="pop.popoverEnter()"
       @leave="pop.popoverLeave()"
