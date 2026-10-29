@@ -271,7 +271,6 @@ function openImages(l: Lineup) {
               {{ l.imageIds.length }}
             </span>
             <span v-if="l.id === currentId" class="current-tag">当前</span>
-            <span v-if="selected.has(l.id)" class="selected-tag"><Icon name="check" :size="12" :stroke="3" /></span>
           </button>
           <div class="body">
             <h3 class="name" :title="l.name">{{ l.name }}</h3>
@@ -400,7 +399,8 @@ function openImages(l: Lineup) {
 .card.selected,
 .card.selected:hover {
   border-color: var(--cyan);
-  box-shadow: inset 0 0 0 1px var(--cyan);
+  /* 光环画在卡片外面：画在里面会被预览图盖住，四周粗细不一 */
+  box-shadow: 0 0 0 1px var(--cyan);
 }
 .card.focused {
   border-color: var(--cyan-dim);
@@ -446,18 +446,6 @@ function openImages(l: Lineup) {
   color: #1b1400;
   font-size: 11px;
   font-weight: 800;
-}
-.selected-tag {
-  position: absolute;
-  right: 6px;
-  top: 6px;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--cyan);
-  color: #031614;
 }
 .body {
   display: flex;
