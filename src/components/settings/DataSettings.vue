@@ -159,8 +159,7 @@ async function clearAll() {
   <section class="s-section">
     <h3 class="s-title">存储情况</h3>
     <p class="s-desc">
-      所有数据只保存在<b>当前浏览器</b>中（IndexedDB），不会上传到任何服务器。
-      清除浏览器的「Cookie 和网站数据」会把它们一起删掉，所以请开启下面的自动备份，或定期导出备份。
+      清除浏览器的「Cookie 和网站数据」会把本网站已记录的内容一起删掉，所以请开启下面的自动备份，或定期导出备份。
     </p>
     <div class="stats">
       <div class="stat">
