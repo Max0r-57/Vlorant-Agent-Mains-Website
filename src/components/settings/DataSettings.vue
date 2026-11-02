@@ -259,7 +259,6 @@ async function clearAll() {
     <div class="s-row">
       <div class="s-row-text">
         <span class="s-row-label">清理未使用的图片</span>
-        <span class="s-row-hint">删除没有被任何 Lineup 引用的图片（一般不会出现，异常中断后可以用它回收空间）</span>
       </div>
       <button type="button" class="btn btn-outline btn-sm" :disabled="!!busy" @click="cleanup">
         {{ busy === 'cleanup' ? '清理中…' : '清理' }}
