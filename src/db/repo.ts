@@ -44,6 +44,76 @@ function plainImage(img: StoredImage): StoredImage {
   return plain
 }
 
+/*
+ * iPhone / iPad 上的浏览器（都是 Safari 的 WebKit 内核）有时不能把文件数据直接写进 IndexedDB，
+ * 会报「Error preparing Blob/File data to be stored in object store」：
+ * 例如导入备份时直接引用压缩包里的一段（文件切片），或者上传时选中的原文件。
+ * 先按原样写入（电脑上大视频不用整个读进内存）；失败时把图片 / 视频读进内存换成普通 Blob，再写一次。
+ */
+async function inMemoryBlob(b: Blob): Promise<Blob> {
+  return new Blob([await b.arrayBuffer()], { type: b.type })
+}
+
+async function inMemoryImage(img: StoredImage): Promise<StoredImage> {
+  const raw = toRaw(img)
+  return { ...raw, blob: await inMemoryBlob(toRaw(raw.blob)), thumb: await inMemoryBlob(toRaw(raw.thumb)) }
+}
+
+/** write 失败时（事务已整个回滚），把 images 的数据读进内存后重试一次 */
+export async function withImageFallback<T>(
+  images: readonly StoredImage[],
+  write: (images: readonly StoredImage[]) => Promise<T>,
+): Promise<T> {
+  try {
+    return await write(images)
+  } catch (e) {
+    if (!images.length) throw e
+    const copies: StoredImage[] = []
+    for (const img of images) copies.push(await inMemoryImage(img))
+    return await write(copies)
+  }
+}
+
+/**
+ * 发出一组写入请求并等待全部完成。某个请求同步抛出异常（例如数据不能保存）时也照样收集其余请求，
+ * 事务回滚后它们的失败都有人处理，不会变成「未处理的 Promise」。
+ */
+export function allRequests(requests: readonly (() => Promise<unknown>)[]) {
+  return Promise.all(
+    requests.map((r) => {
+      try {
+        return r()
+      } catch (e) {
+        return Promise.reject(e)
+      }
+    }),
+  )
+}
+
+type AnyTx = { done: Promise<void>; abort(): void }
+
+/**
+ * 在事务里执行 run：出错时主动回滚（写入请求同步抛出的异常不会自动回滚事务），
+ * 保证要么全部写入、要么什么都没写。
+ */
+export async function inTransaction<T extends AnyTx, R>(tx: T, run: (tx: T) => Promise<R>): Promise<R> {
+  // 事务失败时 tx.done 会 reject；先接上处理，避免在 run 出错时变成未处理的 Promise
+  const done = tx.done
+  done.catch(() => {})
+  try {
+    const result = await run(tx)
+    await done
+    return result
+  } catch (e) {
+    try {
+      tx.abort()
+    } catch {
+      // 事务已经结束（已回滚）
+    }
+    throw e
+  }
+}
+
 export async function loadAll() {
   const db = await getDB()
   const tx = db.transaction(['lineups', 'types'], 'readonly')
@@ -65,14 +135,16 @@ export async function saveLineup(
   removedImageIds: string[] = [],
 ) {
   const db = await getDB()
-  const tx = db.transaction(['lineups', 'images'], 'readwrite')
-  const images = tx.objectStore('images')
-  await Promise.all([
-    tx.objectStore('lineups').put(plainLineup(lineup)),
-    ...newImages.map((img) => images.put(plainImage(img))),
-    ...removedImageIds.map((id) => images.delete(id)),
-  ])
-  await tx.done
+  await withImageFallback(newImages, (imgs) =>
+    inTransaction(db.transaction(['lineups', 'images'], 'readwrite'), async (tx) => {
+      const images = tx.objectStore('images')
+      await allRequests([
+        () => tx.objectStore('lineups').put(plainLineup(lineup)),
+        ...imgs.map((img) => () => images.put(plainImage(img))),
+        ...removedImageIds.map((id) => () => images.delete(id)),
+      ])
+    }),
+  )
 }
 
 export async function deleteLineup(lineup: Lineup) {
@@ -125,7 +197,9 @@ export async function getImage(id: string) {
 /** 修改已保存的图片（例如保存标注后更新标注和缩略图） */
 export async function putImage(img: StoredImage) {
   const db = await getDB()
-  await db.put('images', plainImage(img))
+  await withImageFallback([img], async ([i]) => {
+    await db.put('images', plainImage(i!))
+  })
 }
 
 export async function getAllImageIds() {

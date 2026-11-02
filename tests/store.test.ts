@@ -490,3 +490,107 @@ describe('videos and annotations', () => {
     await expect(store.annotateImage('nope', [], null, async () => newThumb)).rejects.toThrow()
   })
 })
+
+/*
+ * 模拟 iPhone 上的 Safari（WebKit）：文件切片不能直接写进 IndexedDB，
+ * 写入时报「Error preparing Blob/File data to be stored in object store」。
+ */
+function simulateWebKitBlobLimit(opts: { failAll?: boolean } = {}) {
+  const sliced = new WeakSet<Blob>()
+  const origSlice = Blob.prototype.slice
+  const origPut = IDBObjectStore.prototype.put
+  Blob.prototype.slice = function (...args: Parameters<Blob['slice']>) {
+    const b = origSlice.apply(this, args)
+    sliced.add(b)
+    return b
+  }
+  let rejected = 0
+  IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+    const v = value as { blob?: Blob; thumb?: Blob }
+    if (opts.failAll ? v.blob instanceof Blob : (v.blob && sliced.has(v.blob)) || (v.thumb && sliced.has(v.thumb))) {
+      rejected++
+      throw new DOMException('Error preparing Blob/File data to be stored in object store', 'UnknownError')
+    }
+    return origPut.call(this, value, key)
+  }
+  return {
+    rejected: () => rejected,
+    restore() {
+      Blob.prototype.slice = origSlice
+      IDBObjectStore.prototype.put = origPut
+    },
+  }
+}
+
+describe('browsers that cannot store file slices (iPhone Safari)', () => {
+  async function backupWithImages() {
+    const store = useLineups()
+    await store.init()
+    await store.createLineup(
+      { name: '手机导入', typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' },
+      [fakeImage('img_p', 300), fakeVideo('vid_p', 400)],
+    )
+    return (await exportBackup()).blob
+  }
+
+  it('imports a backup by reading the media into memory', async () => {
+    const zip = await backupWithImages()
+    const store = useLineups()
+    for (const mode of ['replace', 'merge'] as const) {
+      await store.clearAll()
+      const webkit = simulateWebKitBlobLimit()
+      try {
+        await store.importBackup(await parseBackup(zip), mode)
+        expect(webkit.rejected()).toBeGreaterThan(0)
+      } finally {
+        webkit.restore()
+      }
+      expect(store.lineups.map((l) => l.name)).toEqual(['手机导入'])
+      const img = (await repo.getImage('img_p'))!
+      expect(img.blob.size).toBe(300)
+      expect(img.blob.type).toBe('image/webp')
+      expect(new Uint8Array(await img.blob.arrayBuffer())[0]).toBe(7)
+      const video = (await repo.getImage('vid_p'))!
+      expect(video.blob.size).toBe(400)
+      expect(video.blob.type).toBe('video/mp4')
+    }
+  })
+
+  it('leaves existing data untouched when the import still fails', async () => {
+    const zip = await backupWithImages()
+    const store = useLineups()
+    await store.updateLineup(store.lineups[0]!.id, { name: '原来的数据' })
+    const webkit = simulateWebKitBlobLimit({ failAll: true })
+    try {
+      await expect(store.importBackup(await parseBackup(zip), 'replace')).rejects.toThrow('Error preparing Blob')
+    } finally {
+      webkit.restore()
+    }
+    // 覆盖导入失败：原来的数据（包括被清空前的图片）都还在
+    const { lineups } = await repo.loadAll()
+    expect(lineups.map((l) => l.name)).toEqual(['原来的数据'])
+    expect((await repo.getImage('img_p'))!.blob.size).toBe(300)
+  })
+
+  it('saves uploaded files that cannot be stored directly', async () => {
+    const store = useLineups()
+    await store.init()
+    const file = new Blob([new Uint8Array(500).fill(9)], { type: 'image/png' })
+    const webkit = simulateWebKitBlobLimit()
+    try {
+      // 选中的原文件也可能被拒绝（这里用切片模拟）
+      const img = { ...fakeImage('img_up'), blob: file.slice(0, 500, 'image/png') }
+      await store.createLineup(
+        { name: '上传', typeId: store.sortedTypes[0]!.id, agentId: 'brimstone', mapId: 'ascent', x: 1, y: 1, note: '' },
+        [img],
+      )
+      expect(webkit.rejected()).toBe(1)
+    } finally {
+      webkit.restore()
+    }
+    const saved = (await repo.getImage('img_up'))!
+    expect(saved.blob.size).toBe(500)
+    expect(saved.blob.type).toBe('image/png')
+    expect((await repo.loadAll()).lineups.map((l) => l.name)).toEqual(['上传'])
+  })
+})

@@ -1,11 +1,13 @@
 import { strFromU8, strToU8 } from 'fflate'
+import type { IDBPTransaction } from 'idb'
 import { toRaw } from 'vue'
 import { POS_MAX, type Lineup, type LineupType, type StoredImage } from '@/types'
 import { plainAnnotations, sanitizeAnnotations, sanitizeCrop } from '@/lib/annotations'
 import { extForMime } from '@/lib/image'
 import { plainLanding, plainRoutes, sanitizeLanding, sanitizeRoutes } from '@/lib/paths'
 import { createZip, openZip, type ZipArchive, type ZipInput } from '@/lib/zip'
-import { getDB } from './database'
+import { getDB, type LineupDB } from './database'
+import { allRequests, inTransaction, withImageFallback } from './repo'
 
 /**
  * 备份文件格式（.zip）：
@@ -331,7 +333,24 @@ export async function applyBackup(input: ParsedBackup, mode: 'merge' | 'replace'
   })
 
   const db = await getDB()
-  const tx = db.transaction(['types', 'lineups', 'images'], 'readwrite')
+  // 图片 / 视频是压缩包的切片：iPhone 上写入失败时，读进内存后整个重新导入一次（见 withImageFallback）
+  await withImageFallback(images, (imgs) =>
+    inTransaction(db.transaction(['types', 'lineups', 'images'], 'readwrite'), (tx) =>
+      writeBackup(tx, mode, types, lineups, imgs),
+    ),
+  )
+}
+
+type BackupTx = IDBPTransaction<LineupDB, ('types' | 'lineups' | 'images')[], 'readwrite'>
+
+/** 在一个事务里写入备份（失败时整个事务回滚，覆盖模式下原有数据不会被清掉） */
+async function writeBackup(
+  tx: BackupTx,
+  mode: 'merge' | 'replace',
+  types: LineupType[],
+  lineups: Lineup[],
+  images: readonly StoredImage[],
+) {
   const typesStore = tx.objectStore('types')
   const lineupStore = tx.objectStore('lineups')
   const imageStore = tx.objectStore('images')
@@ -364,10 +383,9 @@ export async function applyBackup(input: ParsedBackup, mode: 'merge' | 'replace'
     const stale = existing.flatMap((l) => l?.imageIds ?? []).filter((id) => !keep.has(id))
     await Promise.all(stale.map((id) => imageStore.delete(id)))
   }
-  await Promise.all([
-    ...typesToPut.map((t) => typesStore.put(t)),
-    ...images.map((i) => imageStore.put(i)),
-    ...lineups.map((l) => lineupStore.put(l)),
+  await allRequests([
+    ...typesToPut.map((t) => () => typesStore.put(t)),
+    ...images.map((i) => () => imageStore.put(i)),
+    ...lineups.map((l) => () => lineupStore.put(l)),
   ])
-  await tx.done
 }
