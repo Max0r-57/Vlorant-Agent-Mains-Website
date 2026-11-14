@@ -37,7 +37,7 @@ const MAP_LIST: Omit<MapDef, 'image' | 'preview'>[] = [
   { id: 'lotus', name: '莲华古城', en: 'Lotus' },
   { id: 'sunset', name: '日落之城', en: 'Sunset' },
   { id: 'abyss', name: '幽邃地窟', en: 'Abyss' },
-  { id: 'tianshu', name: '天枢云阙' },
+  { id: 'tianshu', name: '天枢云阙', en: 'Summit' },
   { id: 'bind', name: '源工重镇', en: 'Bind' },
   { id: 'breeze', name: '微风岛屿', en: 'Breeze' },
   { id: 'fracture', name: '裂变峡谷', en: 'Fracture' },
